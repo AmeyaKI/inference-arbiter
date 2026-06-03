@@ -1,15 +1,22 @@
 """Locust load test for inference-arbiter.
 
-Run:
-  locust -f benchmarks/locustfile.py --host http://127.0.0.1:8080
+Run one scenario at a time:
 
-Scenarios (set ARBITER_SCENARIO env on gateway or use model pin in tasks):
-  - baseline: pin model=large on all requests (configure gateway ROUTING_MODE or client model)
-  - arbiter: model=auto (default)
+  # Scenario 1 — all traffic pinned to large (baseline)
+  locust -f benchmarks/locustfile.py BaselineUser --host http://127.0.0.1:8080
+
+  # Scenario 2 — round-robin across all tiers (static distribution control)
+  locust -f benchmarks/locustfile.py RoundRobinUser --host http://127.0.0.1:8080
+
+  # Scenario 3 — complexity-based auto-routing via inference-arbiter
+  locust -f benchmarks/locustfile.py ArbiterUser --host http://127.0.0.1:8080
+
+Compare P50/P95/P99 latency and RPS across all three to quantify routing benefit.
 """
 
 from __future__ import annotations
 
+import itertools
 import random
 
 from locust import HttpUser, between, task
@@ -86,8 +93,32 @@ class ArbiterUser(HttpUser):
                 resp.failure(f"status {resp.status_code}")
 
 
+class RoundRobinUser(HttpUser):
+    """Cycle through small/medium/large in order — static distribution control scenario."""
+
+    wait_time = between(0.1, 0.5)
+    _tier_cycle = itertools.cycle(["small", "medium", "large"])
+
+    @task
+    def round_robin(self):
+        tier = next(self._tier_cycle)
+        payload = {
+            "model": tier,
+            "messages": [{"role": "user", "content": mixed_prompt()}],
+            "max_tokens": 64,
+        }
+        with self.client.post(
+            "/v1/chat/completions",
+            json=payload,
+            catch_response=True,
+            timeout=120,
+        ) as resp:
+            if resp.status_code >= 500:
+                resp.failure(f"status {resp.status_code}")
+
+
 class BaselineUser(HttpUser):
-    """Pin all traffic to large tier — run with: locust -f benchmarks/locustfile.py BaselineUser"""
+    """Pin all traffic to large tier — baseline worst-case scenario."""
 
     wait_time = between(0.1, 0.5)
 
@@ -98,4 +129,11 @@ class BaselineUser(HttpUser):
             "messages": [{"role": "user", "content": mixed_prompt()}],
             "max_tokens": 64,
         }
-        self.client.post("/v1/chat/completions", json=payload, timeout=120)
+        with self.client.post(
+            "/v1/chat/completions",
+            json=payload,
+            catch_response=True,
+            timeout=120,
+        ) as resp:
+            if resp.status_code >= 500:
+                resp.failure(f"status {resp.status_code}")

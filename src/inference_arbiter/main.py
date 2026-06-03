@@ -22,7 +22,7 @@ from inference_arbiter.metrics import (
     record_slo_breach,
     sync_endpoint_gauges,
 )
-from inference_arbiter.models import DegradationReason, RoutingMode
+from inference_arbiter.models import DegradationReason, RoutingMode, snapshot_state
 from inference_arbiter.openai_types import ChatCompletionRequest, ModelCard, ModelListResponse
 from inference_arbiter.priority import PriorityGate
 from inference_arbiter.proxy import BackendProxy
@@ -73,6 +73,18 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
     app.state.arbiter = AppState()
+
+    @app.get("/")
+    async def root():
+        return {
+            "service": "inference-arbiter",
+            "status": "running",
+            "docs": "/docs",
+            "health": "/healthz",
+            "metrics": "/metrics",
+            "chat": "POST /v1/chat/completions",
+            "models": "/v1/models",
+        }
 
     @app.get("/healthz")
     async def healthz():
@@ -140,12 +152,18 @@ def create_app() -> FastAPI:
         record_routing(decision, priority.value)
         sync_endpoint_gauges(state.registry)
 
+        low_confidence = (
+            decision.complexity_confidence is not None
+            and decision.complexity_confidence < state.settings.low_confidence_threshold
+        )
         logger.info(
             "routing_decision",
             request_id=request_id,
             tier=decision.tier.value,
             endpoint=decision.endpoint_name,
             complexity=decision.complexity.value if decision.complexity else None,
+            complexity_confidence=decision.complexity_confidence,
+            low_confidence=low_confidence,
             reason=decision.routing_reason.value,
             degraded=decision.degraded,
             eta_ms=decision.estimated_eta_ms,
@@ -155,7 +173,8 @@ def create_app() -> FastAPI:
         payload = body.backend_payload(decision.backend_model)
         start = time.perf_counter()
         try:
-            assert state.proxy is not None
+            if state.proxy is None:
+                raise HTTPException(status_code=503, detail="Gateway not ready")
             result = await state.proxy.forward(decision, payload, body.stream)
             latency_s = time.perf_counter() - start
             record_latency(
@@ -167,7 +186,7 @@ def create_app() -> FastAPI:
                 request_id,
                 actual_latency_ms=latency_s * 1000,
                 status="completed",
-                endpoint_snapshot=audit_record.endpoint_snapshot,
+                endpoint_snapshot=snapshot_state(state.router.endpoint_state_for(decision)),
             )
             return result
         except HTTPException as exc:
