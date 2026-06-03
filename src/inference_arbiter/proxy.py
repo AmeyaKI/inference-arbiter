@@ -55,16 +55,25 @@ class BackendProxy:
             state.record_failure(self.settings)
             raise HTTPException(status_code=response.status_code, detail=response.text)
         if response.status_code >= 400:
-            state.record_failure(self.settings)
+            # 4xx is a client/config error, not an endpoint failure — do not penalise the circuit breaker.
+            state.record_success(latency_ms, self.settings.latency_ema_alpha)
+            try:
+                content = response.json()
+            except Exception:
+                content = {"error": response.text}
             return JSONResponse(
                 status_code=response.status_code,
-                content=response.json() if response.content else {"error": response.text},
+                content=content,
                 headers=decision.response_headers,
             )
         state.record_success(latency_ms, self.settings.latency_ema_alpha)
+        try:
+            content = response.json()
+        except Exception:
+            content = {"error": response.text}
         return JSONResponse(
             status_code=response.status_code,
-            content=response.json(),
+            content=content,
             headers=decision.response_headers,
         )
 
@@ -73,10 +82,17 @@ class BackendProxy:
     ) -> StreamingResponse:
         request = self.client.build_request("POST", url, json=payload)
         response = await self.client.send(request, stream=True)
-        if response.status_code >= 400:
+        if response.status_code >= 500:
             body = await response.aread()
             await response.aclose()
             state.record_failure(self.settings)
+            raise HTTPException(status_code=response.status_code, detail=body.decode())
+        if response.status_code >= 400:
+            # 4xx: client/config error — record success so the circuit breaker is not penalised.
+            body = await response.aread()
+            await response.aclose()
+            latency_ms = (time.perf_counter() - start) * 1000
+            state.record_success(latency_ms, self.settings.latency_ema_alpha)
             raise HTTPException(status_code=response.status_code, detail=body.decode())
 
         async def generate() -> AsyncIterator[bytes]:

@@ -1,5 +1,7 @@
+# local
 .claude/
 TODO
+*.md
 
 # Python
 .venv/

@@ -5,10 +5,23 @@ from httpx import ASGITransport, AsyncClient
 
 from inference_arbiter.config import reset_settings
 from inference_arbiter.main import create_app
+from inference_arbiter.models import ModelTier
 
 
 @pytest.fixture
 async def app():
+    reset_settings()
+    application = create_app()
+    state = application.state.arbiter
+    async with application.router.lifespan_context(application):
+        yield application
+    if state.http_client is not None:
+        await state.http_client.aclose()
+
+
+@pytest.fixture
+async def shadow_app(monkeypatch):
+    monkeypatch.setenv("ARBITER_ROUTING_MODE", "shadow")
     reset_settings()
     application = create_app()
     state = application.state.arbiter
@@ -125,3 +138,49 @@ async def test_batch_shed_under_pressure(app, monkeypatch):
         )
         assert resp.status_code == 503
         assert resp.headers.get("Retry-After")
+
+
+@pytest.mark.asyncio
+async def test_shadow_mode_routes_to_default(shadow_app, monkeypatch):
+    """Shadow mode must dispatch to shadow_default_tier (large) regardless of complexity."""
+    captured: list = []
+
+    async def fake_forward(decision, payload, stream):
+        from fastapi.responses import JSONResponse
+
+        captured.append(decision)
+        return JSONResponse(
+            status_code=200,
+            content={"id": "cmpl-shadow", "object": "chat.completion", "choices": []},
+            headers=decision.response_headers,
+        )
+
+    monkeypatch.setattr(shadow_app.state.arbiter.proxy, "forward", fake_forward)
+
+    async with AsyncClient(transport=_transport(shadow_app), base_url="http://test") as client:
+        # A complex prompt would normally route to LARGE; shadow must also route to LARGE (default).
+        resp = await client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "auto",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": (
+                            "Compare and analyze the epistemological frameworks of Kant and Hegel "
+                            "step by step across five dimensions with detailed proofs."
+                        ),
+                    }
+                ],
+            },
+        )
+        assert resp.status_code == 200
+
+    assert len(captured) == 1
+    decision = captured[0]
+    # Shadow mode always dispatches to shadow_default_tier (large).
+    assert decision.tier == ModelTier.LARGE
+    # Shadow mode must not set the degraded flag.
+    assert decision.degraded is False
+    # shadow_would_route_to records the complexity-chosen tier (which may differ from large).
+    assert decision.shadow_would_route_to is not None

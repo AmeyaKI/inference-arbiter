@@ -43,6 +43,7 @@ class Settings(BaseSettings):
 
     audit_max_records: int = 10_000
     log_level: str = "INFO"
+    low_confidence_threshold: float = 0.7
 
     allow_degraded_ok: bool = Field(default=True, description="Honor auto-degraded-ok model flag")
 
