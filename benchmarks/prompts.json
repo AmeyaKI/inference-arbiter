@@ -1,0 +1,17 @@
+{
+  "simple": [
+    "What is the capital of France?",
+    "How many continents are there?",
+    "What is the speed of light?"
+  ],
+  "medium": [
+    "Summarize the causes of World War I in three paragraphs.",
+    "Explain how DNS resolution works for a web request.",
+    "Compare SQL and NoSQL databases for a startup MVP."
+  ],
+  "complex": [
+    "Compare Kant and Hegel across five epistemological dimensions with step-by-step analysis.",
+    "Debug and optimize this async Python service with formal reasoning about race conditions.",
+    "Prove the amortized complexity of a Fibonacci heap decrease-key operation."
+  ]
+}
