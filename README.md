@@ -44,6 +44,7 @@ client (OpenAI SDK)
 Every request goes through four stages:
 
 **1. Complexity classification** — the heuristic classifier scores the prompt on word count, keyword signals (`compare`, `analyze`, `synthesize`, `step by step`), code blocks, math notation, question count, and structured data. It assigns a label:
+
 - `simple` → routed to small tier (`llama3.2:1b`)
 - `medium` → routed to medium tier (`llama3.2:3b`)
 - `complex` → routed to large tier (`llama3.1:8b`)
@@ -69,7 +70,6 @@ This starts everything in containers: Ollama, the gateway, Prometheus, and Grafa
 ### First run
 
 ```bash
-git clone <repo>
 cd inference-arbiter
 docker compose up --build
 ```
@@ -79,9 +79,9 @@ docker compose up --build
 1. Docker builds the gateway image (~30 s)
 2. The `ollama` container starts the Ollama server
 3. The `ollama-init` container runs three `ollama pull` commands to download the model weights:
-   - `llama3.2:1b` (~1.3 GB)
-   - `llama3.2:3b` (~2.0 GB)
-   - `llama3.1:8b` (~4.7 GB)
+  - `llama3.2:1b` (~1.3 GB)
+  - `llama3.2:3b` (~2.0 GB)
+  - `llama3.1:8b` (~4.7 GB)
 4. The gateway starts only after all three models are pulled
 5. Prometheus and Grafana start after the gateway
 
@@ -92,6 +92,7 @@ docker compose logs -f ollama-init
 ```
 
 You will see repeated lines like:
+
 ```
 ollama-init-1  | pulling manifest
 ollama-init-1  | pulling aabd4debf0c8... 100% ▕████████████▏ 1.3 GB
@@ -148,12 +149,14 @@ ollama pull llama3.1:8b
 ```
 
 Verify Ollama is running:
+
 ```bash
 curl http://localhost:11434/api/tags
 # Should return a JSON object with the three models listed
 ```
 
 If Ollama is not running, start it:
+
 ```bash
 ollama serve
 ```
@@ -174,12 +177,14 @@ uvicorn inference_arbiter.main:app --reload --port 8080
 ```
 
 You should see:
+
 ```
 INFO:     Uvicorn running on http://0.0.0.0:8080 (Press CTRL+C to quit)
 {"routing_mode": "active", "endpoints": ["small", "medium", "large"], "event": "gateway_started", ...}
 ```
 
 For shadow mode (classify and log without actually routing to different tiers):
+
 ```bash
 ARBITER_ROUTING_MODE=shadow uvicorn inference_arbiter.main:app --reload --port 8080
 ```
@@ -257,6 +262,7 @@ curl -si http://localhost:8080/v1/chat/completions \
 ```
 
 With a 1 ms deadline (impossible to meet), you get:
+
 ```
 X-Arbiter-Model-Tier: small
 X-Degraded-Mode: true
@@ -264,6 +270,7 @@ X-Degradation-Reason: DEADLINE_TOO_TIGHT
 ```
 
 With a realistic deadline during normal load:
+
 ```bash
 curl -si http://localhost:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
@@ -366,22 +373,26 @@ for chunk in stream:
 
 Every response from `POST /v1/chat/completions` carries routing metadata in the headers:
 
-| Header | Example value | Meaning |
-|--------|--------------|---------|
-| `X-Request-ID` | `3f2a1b4c-...` | Unique ID for this request; use it to look up the audit record |
-| `X-Arbiter-Model-Tier` | `small` | Which tier actually handled the request |
-| `X-Arbiter-Complexity` | `complex` | Complexity label assigned by the classifier |
-| `X-Degraded-Mode` | `true` | Whether the request was handled by a non-preferred tier |
-| `X-Degradation-Reason` | `DEADLINE_TOO_TIGHT` | Why it degraded (see table below) |
+
+| Header                 | Example value        | Meaning                                                        |
+| ---------------------- | -------------------- | -------------------------------------------------------------- |
+| `X-Request-ID`         | `3f2a1b4c-...`       | Unique ID for this request; use it to look up the audit record |
+| `X-Arbiter-Model-Tier` | `small`              | Which tier actually handled the request                        |
+| `X-Arbiter-Complexity` | `complex`            | Complexity label assigned by the classifier                    |
+| `X-Degraded-Mode`      | `true`               | Whether the request was handled by a non-preferred tier        |
+| `X-Degradation-Reason` | `DEADLINE_TOO_TIGHT` | Why it degraded (see table below)                              |
+
 
 **Degradation reasons:**
 
-| Reason | Meaning |
-|--------|---------|
+
+| Reason               | Meaning                                                                          |
+| -------------------- | -------------------------------------------------------------------------------- |
 | `ENDPOINT_SATURATED` | Preferred tier's queue depth was too high; downgraded to faster tier to meet SLO |
-| `DEADLINE_TOO_TIGHT` | No tier could meet the SLO deadline; routed to fastest available |
-| `CIRCUIT_OPEN` | Preferred tier's circuit breaker tripped after repeated 5xx failures |
-| `MODEL_CAPACITY` | No viable endpoint at all; fallback to small tier |
+| `DEADLINE_TOO_TIGHT` | No tier could meet the SLO deadline; routed to fastest available                 |
+| `CIRCUIT_OPEN`       | Preferred tier's circuit breaker tripped after repeated 5xx failures             |
+| `MODEL_CAPACITY`     | No viable endpoint at all; fallback to small tier                                |
+
 
 ---
 
@@ -445,32 +456,36 @@ The audit store holds the last 10,000 decisions in memory (FIFO eviction). It re
 
 All settings are environment variables with the `ARBITER_` prefix. Set them in your shell, in a `.env` file at the repo root, or in the `environment:` block of `docker-compose.yml`.
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `ARBITER_HOST` | `0.0.0.0` | Interface to bind |
-| `ARBITER_PORT` | `8080` | Port to listen on |
-| `ARBITER_ROUTING_MODE` | `active` | `active` routes requests; `shadow` classifies and logs but routes everything to the default tier |
-| `ARBITER_OLLAMA_BASE_URL` | `http://127.0.0.1:11434` | Ollama server base URL |
-| `ARBITER_SMALL_MODEL` | `llama3.2:1b` | Backend model for the small tier |
-| `ARBITER_MEDIUM_MODEL` | `llama3.2:3b` | Backend model for the medium tier |
-| `ARBITER_LARGE_MODEL` | `llama3.1:8b` | Backend model for the large tier |
-| `ARBITER_LATENCY_EMA_ALPHA` | `0.3` | EMA decay factor for per-endpoint latency tracking (0–1; higher = more weight on recent observations) |
-| `ARBITER_QUEUE_PRESSURE_THRESHOLD` | `3` | In-flight request count above which an endpoint is considered saturated |
-| `ARBITER_CIRCUIT_FAILURE_THRESHOLD` | `3` | Consecutive 5xx failures before opening the circuit breaker |
-| `ARBITER_CIRCUIT_RECOVERY_TIMEOUT_S` | `30.0` | Seconds before an open circuit tries a probe request |
-| `ARBITER_BATCH_QUEUE_MAX_WAIT_S` | `5.0` | How long to hold a batch request before shedding it |
-| `ARBITER_BATCH_RETRY_AFTER_S` | `30` | `Retry-After` value returned in 503 responses |
-| `ARBITER_HTTP_TIMEOUT_S` | `300.0` | httpx client timeout for backend requests |
-| `ARBITER_AUDIT_MAX_RECORDS` | `10000` | Maximum routing decisions to keep in memory |
-| `ARBITER_LOW_CONFIDENCE_THRESHOLD` | `0.7` | Classifier confidence below this value adds `low_confidence: true` to structured logs |
-| `ARBITER_LOG_LEVEL` | `INFO` | Log level |
+
+| Variable                             | Default                  | Description                                                                                           |
+| ------------------------------------ | ------------------------ | ----------------------------------------------------------------------------------------------------- |
+| `ARBITER_HOST`                       | `0.0.0.0`                | Interface to bind                                                                                     |
+| `ARBITER_PORT`                       | `8080`                   | Port to listen on                                                                                     |
+| `ARBITER_ROUTING_MODE`               | `active`                 | `active` routes requests; `shadow` classifies and logs but routes everything to the default tier      |
+| `ARBITER_OLLAMA_BASE_URL`            | `http://127.0.0.1:11434` | Ollama server base URL                                                                                |
+| `ARBITER_SMALL_MODEL`                | `llama3.2:1b`            | Backend model for the small tier                                                                      |
+| `ARBITER_MEDIUM_MODEL`               | `llama3.2:3b`            | Backend model for the medium tier                                                                     |
+| `ARBITER_LARGE_MODEL`                | `llama3.1:8b`            | Backend model for the large tier                                                                      |
+| `ARBITER_LATENCY_EMA_ALPHA`          | `0.3`                    | EMA decay factor for per-endpoint latency tracking (0–1; higher = more weight on recent observations) |
+| `ARBITER_QUEUE_PRESSURE_THRESHOLD`   | `3`                      | In-flight request count above which an endpoint is considered saturated                               |
+| `ARBITER_CIRCUIT_FAILURE_THRESHOLD`  | `3`                      | Consecutive 5xx failures before opening the circuit breaker                                           |
+| `ARBITER_CIRCUIT_RECOVERY_TIMEOUT_S` | `30.0`                   | Seconds before an open circuit tries a probe request                                                  |
+| `ARBITER_BATCH_QUEUE_MAX_WAIT_S`     | `5.0`                    | How long to hold a batch request before shedding it                                                   |
+| `ARBITER_BATCH_RETRY_AFTER_S`        | `30`                     | `Retry-After` value returned in 503 responses                                                         |
+| `ARBITER_HTTP_TIMEOUT_S`             | `300.0`                  | httpx client timeout for backend requests                                                             |
+| `ARBITER_AUDIT_MAX_RECORDS`          | `10000`                  | Maximum routing decisions to keep in memory                                                           |
+| `ARBITER_LOW_CONFIDENCE_THRESHOLD`   | `0.7`                    | Classifier confidence below this value adds `low_confidence: true` to structured logs                 |
+| `ARBITER_LOG_LEVEL`                  | `INFO`                   | Log level                                                                                             |
+
 
 **Example: use a different Ollama model for the large tier**
+
 ```bash
 ARBITER_LARGE_MODEL=llama3.1:70b uvicorn inference_arbiter.main:app --port 8080
 ```
 
 **Example: tighten the circuit breaker**
+
 ```bash
 ARBITER_CIRCUIT_FAILURE_THRESHOLD=2 ARBITER_CIRCUIT_RECOVERY_TIMEOUT_S=10 uvicorn inference_arbiter.main:app --port 8080
 ```
@@ -528,15 +543,17 @@ curl -s http://localhost:8080/metrics | grep -E "^(requests_routed|routing_decis
 
 Key metrics:
 
-| Metric | Labels | Description |
-|--------|--------|-------------|
-| `requests_routed_total` | `tier`, `policy`, `priority` | Count of routed requests |
-| `routing_decision_total` | `reason` | Count of routing decisions by reason (`complexity`, `slo_pressure`, `circuit_breaker`, `fallback`, `shadow`) |
-| `slo_breach_total` | `tier`, `reason` | Count of requests where no endpoint could meet the deadline |
-| `endpoint_queue_depth` | `endpoint` | Current estimated queue depth per endpoint |
-| `endpoint_in_flight` | `endpoint` | Current in-flight request count per endpoint |
-| `request_latency_seconds` | `tier`, `complexity` | Histogram of end-to-end latency |
-| `classifier_confidence` | `complexity` | Histogram of classifier confidence scores |
+
+| Metric                    | Labels                       | Description                                                                                                  |
+| ------------------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `requests_routed_total`   | `tier`, `policy`, `priority` | Count of routed requests                                                                                     |
+| `routing_decision_total`  | `reason`                     | Count of routing decisions by reason (`complexity`, `slo_pressure`, `circuit_breaker`, `fallback`, `shadow`) |
+| `slo_breach_total`        | `tier`, `reason`             | Count of requests where no endpoint could meet the deadline                                                  |
+| `endpoint_queue_depth`    | `endpoint`                   | Current estimated queue depth per endpoint                                                                   |
+| `endpoint_in_flight`      | `endpoint`                   | Current in-flight request count per endpoint                                                                 |
+| `request_latency_seconds` | `tier`, `complexity`         | Histogram of end-to-end latency                                                                              |
+| `classifier_confidence`   | `complexity`                 | Histogram of classifier confidence scores                                                                    |
+
 
 **Useful Prometheus queries:**
 
@@ -572,15 +589,17 @@ Go to `http://localhost:3000` and log in with `admin` / `admin`.
 
 The **inference-arbiter** dashboard is pre-loaded with 7 panels:
 
-| Panel | What it shows |
-|-------|--------------|
-| Request Rate by Tier | Live requests/s split by small / medium / large |
-| Routing Decisions by Reason | Pie chart — how often each routing path is taken |
-| SLO Breach Count | Stat — how many requests couldn't meet their deadline |
-| Queue Depth per Endpoint | Bar gauge — how many requests are waiting at each endpoint |
-| In-Flight per Endpoint | Bar gauge — current concurrency at each endpoint |
-| Latency P50 / P95 by Tier | Line graph — latency percentiles over time |
-| Classifier Confidence by Label | Line graph — p10 and p50 confidence scores |
+
+| Panel                          | What it shows                                              |
+| ------------------------------ | ---------------------------------------------------------- |
+| Request Rate by Tier           | Live requests/s split by small / medium / large            |
+| Routing Decisions by Reason    | Pie chart — how often each routing path is taken           |
+| SLO Breach Count               | Stat — how many requests couldn't meet their deadline      |
+| Queue Depth per Endpoint       | Bar gauge — how many requests are waiting at each endpoint |
+| In-Flight per Endpoint         | Bar gauge — current concurrency at each endpoint           |
+| Latency P50 / P95 by Tier      | Line graph — latency percentiles over time                 |
+| Classifier Confidence by Label | Line graph — p10 and p50 confidence scores                 |
+
 
 The dashboard auto-refreshes every 10 seconds. Send a few requests first so there is data to display.
 
@@ -671,13 +690,15 @@ Enter 20 users, 4 spawn rate, then click Start. You get live charts for requests
 
 Each `--csv` run produces `<prefix>_stats.csv` and `<prefix>_stats_history.csv`. The key columns in `_stats.csv`:
 
-| Column | What it means |
-|--------|--------------|
-| `50%` | Median latency (ms) |
-| `95%` | P95 latency (ms) — the primary benchmark target |
-| `99%` | P99 latency — tail risk |
-| `Requests/s` | Throughput |
-| `Failures/s` | Error rate (5xx responses) |
+
+| Column       | What it means                                   |
+| ------------ | ----------------------------------------------- |
+| `50%`        | Median latency (ms)                             |
+| `95%`        | P95 latency (ms) — the primary benchmark target |
+| `99%`        | P99 latency — tail risk                         |
+| `Requests/s` | Throughput                                      |
+| `Failures/s` | Error rate (5xx responses)                      |
+
 
 Quick comparison after all three runs:
 
@@ -778,3 +799,4 @@ Then use `http://localhost:8181` in all examples.
 - [SPEC.md](SPEC.md) — full product and architecture specification
 - [BUILD.md](BUILD.md) — v1 implementation notes
 - `GET /docs` — interactive FastAPI OpenAPI documentation (available when the gateway is running)
+
