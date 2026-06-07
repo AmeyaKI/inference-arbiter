@@ -2,6 +2,7 @@
 .claude/
 TODO
 *.md
+!README.md
 
 # Python
 .venv/

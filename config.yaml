@@ -1,0 +1,72 @@
+host: "0.0.0.0"
+port: 8080
+
+routing:
+  mode: active  # active | shadow | legacy
+  engine: full  # full | legacy
+  shadow_default_tier: large
+
+ollama_base_url: "http://127.0.0.1:11434"
+models:
+  small: "llama3.2:1b"
+  medium: "llama3.2:3b"
+  large: "llama3.1:8b"
+
+endpoints:
+  - name: small
+    tier: small
+    base_latency_ms: 150.0
+    max_concurrency: 8
+    tier_weight: 1.0
+  - name: medium
+    tier: medium
+    base_latency_ms: 400.0
+    max_concurrency: 4
+    tier_weight: 3.0
+  - name: large
+    tier: large
+    base_latency_ms: 900.0
+    max_concurrency: 2
+    tier_weight: 8.0
+
+state:
+  latency_ema_alpha: 0.2
+  ttft_ema_alpha: 0.2
+  error_rate_ema_alpha: 0.2
+  p95_window_size: 100
+  p95_spike_threshold_ms: 2000.0
+  queue_pressure_threshold: 3
+  verification_overhead_ms: 1.0
+
+admission:
+  batch_retry_after_s: 30
+  batch_immediate_shed: true
+
+circuit_breaker:
+  failure_threshold: 3
+  error_rate_threshold: 0.3
+  recovery_timeout_s: 30.0
+
+bandit:
+  linucb_alpha: 0.5
+  cold_start_min_observations_per_tier: 500
+  heuristic_confidence_threshold: 0.7
+  feature_dim: 16
+
+telemetry:
+  ring_buffer_size: 10000
+  updater_interval_s: 5.0
+
+verification:
+  max_output_length_multiplier: 4.0
+  enabled_checks:
+    - json
+    - length
+    - tool_call
+
+observability:
+  audit_max_records: 10000
+  otel_enabled: true
+  otel_service_name: inference-arbiter
+
+http_timeout_s: 300.0

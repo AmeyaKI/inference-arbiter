@@ -56,20 +56,23 @@ async def test_models_list(app):
 
 @pytest.mark.asyncio
 async def test_chat_completions_mocked(app, monkeypatch):
-    async def fake_forward(decision, payload, stream):
+    async def fake_invoke(**kwargs):
         from fastapi.responses import JSONResponse
 
-        return JSONResponse(
-            status_code=200,
-            content={
-                "id": "cmpl-test",
-                "object": "chat.completion",
-                "choices": [{"message": {"role": "assistant", "content": "Paris"}}],
-            },
-            headers=decision.response_headers,
+        return (
+            JSONResponse(
+                status_code=200,
+                content={
+                    "id": "cmpl-test",
+                    "object": "chat.completion",
+                    "choices": [{"message": {"role": "assistant", "content": "Paris"}}],
+                },
+            ),
+            {"choices": [{"message": {"role": "assistant", "content": "Paris"}}]},
+            10.0,
         )
 
-    monkeypatch.setattr(app.state.arbiter.proxy, "forward", fake_forward)
+    monkeypatch.setattr(app.state.arbiter.client, "invoke", fake_invoke)
 
     async with AsyncClient(transport=_transport(app), base_url="http://test") as client:
         resp = await client.post(
@@ -82,7 +85,7 @@ async def test_chat_completions_mocked(app, monkeypatch):
             },
         )
         assert resp.status_code == 200
-        assert resp.headers.get("X-Arbiter-Model-Tier") in ("small", "medium", "large")
+        assert resp.headers.get("X-Model-Tier") in ("small", "medium", "large")
         assert resp.headers.get("X-Request-ID")
 
         request_id = resp.headers["X-Request-ID"]
@@ -90,21 +93,47 @@ async def test_chat_completions_mocked(app, monkeypatch):
         assert audit.status_code == 200
         body = audit.json()
         assert body["request_id"] == request_id
-        assert body["tier"] == resp.headers["X-Arbiter-Model-Tier"]
+        assert body["tier"] == resp.headers["X-Model-Tier"]
+
+
+@pytest.mark.asyncio
+async def test_routing_decisions_query_param(app, monkeypatch):
+    async def fake_invoke(**kwargs):
+        from fastapi.responses import JSONResponse
+
+        return (
+            JSONResponse(status_code=200, content={"choices": [{"message": {"content": "ok"}}]}),
+            {"choices": [{"message": {"content": "ok"}}]},
+            5.0,
+        )
+
+    monkeypatch.setattr(app.state.arbiter.client, "invoke", fake_invoke)
+
+    async with AsyncClient(transport=_transport(app), base_url="http://test") as client:
+        resp = await client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "auto",
+                "messages": [{"role": "user", "content": "Hi"}],
+            },
+        )
+        request_id = resp.headers["X-Request-ID"]
+        audit = await client.get(f"/v1/routing/decisions?request_id={request_id}")
+        assert audit.status_code == 200
 
 
 @pytest.mark.asyncio
 async def test_streaming_mocked(app, monkeypatch):
     from fastapi.responses import StreamingResponse
 
-    async def fake_stream(decision, payload, stream):
+    async def fake_invoke(**kwargs):
         async def gen():
             yield b'data: {"choices":[{"delta":{"content":"Hi"}}]}\n\n'
             yield b"data: [DONE]\n\n"
 
-        return StreamingResponse(gen(), media_type="text/event-stream", headers=decision.response_headers)
+        return StreamingResponse(gen(), media_type="text/event-stream"), None, 5.0
 
-    monkeypatch.setattr(app.state.arbiter.proxy, "forward", fake_stream)
+    monkeypatch.setattr(app.state.arbiter.client, "invoke", fake_invoke)
 
     async with AsyncClient(transport=_transport(app), base_url="http://test") as client:
         async with client.stream(
@@ -142,23 +171,21 @@ async def test_batch_shed_under_pressure(app, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_shadow_mode_routes_to_default(shadow_app, monkeypatch):
-    """Shadow mode must dispatch to shadow_default_tier (large) regardless of complexity."""
-    captured: list = []
-
-    async def fake_forward(decision, payload, stream):
+    async def fake_invoke(**kwargs):
         from fastapi.responses import JSONResponse
 
-        captured.append(decision)
-        return JSONResponse(
-            status_code=200,
-            content={"id": "cmpl-shadow", "object": "chat.completion", "choices": []},
-            headers=decision.response_headers,
+        return (
+            JSONResponse(
+                status_code=200,
+                content={"id": "cmpl-shadow", "object": "chat.completion", "choices": []},
+            ),
+            {"choices": []},
+            5.0,
         )
 
-    monkeypatch.setattr(shadow_app.state.arbiter.proxy, "forward", fake_forward)
+    monkeypatch.setattr(shadow_app.state.arbiter.client, "invoke", fake_invoke)
 
     async with AsyncClient(transport=_transport(shadow_app), base_url="http://test") as client:
-        # A complex prompt would normally route to LARGE; shadow must also route to LARGE (default).
         resp = await client.post(
             "/v1/chat/completions",
             json={
@@ -175,12 +202,10 @@ async def test_shadow_mode_routes_to_default(shadow_app, monkeypatch):
             },
         )
         assert resp.status_code == 200
+        assert resp.headers.get("X-Model-Tier") == ModelTier.LARGE.value
 
-    assert len(captured) == 1
-    decision = captured[0]
-    # Shadow mode always dispatches to shadow_default_tier (large).
-    assert decision.tier == ModelTier.LARGE
-    # Shadow mode must not set the degraded flag.
-    assert decision.degraded is False
-    # shadow_would_route_to records the complexity-chosen tier (which may differ from large).
-    assert decision.shadow_would_route_to is not None
+        request_id = resp.headers["X-Request-ID"]
+        audit = await client.get(f"/v1/routing/decisions/{request_id}")
+        body = audit.json()
+        assert body["final_tier"] == ModelTier.LARGE.value
+        assert body.get("shadow_would_route_to") is not None

@@ -1,0 +1,22 @@
+{
+  "scenarios": [
+    {
+      "name": "baseline_all_large",
+      "command": "locust -f load/locustfile.py BaselineUser --host http://127.0.0.1:8080"
+    },
+    {
+      "name": "round_robin",
+      "command": "locust -f load/locustfile.py RoundRobinUser --host http://127.0.0.1:8080"
+    },
+    {
+      "name": "inference_arbiter_full",
+      "command": "locust -f load/locustfile.py ArbiterUser --host http://127.0.0.1:8080"
+    }
+  ],
+  "kpis": [
+    "slo_attainment_rate",
+    "cost_proxy_per_million_tokens",
+    "bandit_convergence_requests"
+  ],
+  "note": "Run each Locust scenario against a live stack, then compare Prometheus KPI metrics."
+}
