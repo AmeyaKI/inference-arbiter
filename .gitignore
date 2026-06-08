@@ -24,3 +24,7 @@ htmlcov/
 
 # Benchmark artifacts
 benchmarks/results/
+
+
+# local
+.archive/

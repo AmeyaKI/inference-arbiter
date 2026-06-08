@@ -257,6 +257,7 @@ class TierExecutor:
             best_response, _, _ = await invoke_backend(
                 tier=tier, payload=payload, stream=True, ctx=ctx
             )
+            ctx.update_elapsed()
             break
 
         if best_response is None:

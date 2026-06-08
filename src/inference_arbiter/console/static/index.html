@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>inference-arbiter console</title>
+  <link rel="stylesheet" href="/console/static/styles.css" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+</head>
+<body>
+  <header class="header">
+    <div class="brand">
+      <h1>inference-arbiter</h1>
+      <span class="subtitle">unified console</span>
+    </div>
+    <div class="status-pills" id="status-pills">
+      <span class="pill" id="pill-gateway">gateway …</span>
+      <span class="pill" id="pill-bandit">bandit …</span>
+    </div>
+  </header>
+
+  <nav class="tabs">
+    <button class="tab active" data-tab="live">Live</button>
+    <button class="tab" data-tab="benchmark">Benchmark</button>
+    <button class="tab" data-tab="metrics">Metrics</button>
+  </nav>
+
+  <main>
+    <!-- Live tab -->
+    <section id="panel-live" class="panel active">
+      <div class="panel-header">
+        <h2>Live routing</h2>
+        <div style="display:flex;align-items:center;gap:0.75rem">
+          <span class="sse-badge hidden" id="sse-status">↩ reconnecting…</span>
+          <span class="hint">Real-time request feed via SSE — click any row for full audit</span>
+        </div>
+      </div>
+      <div id="live-feed" class="live-feed">
+        <div id="live-empty" class="live-empty">
+          Waiting for requests… Send a request to <code>POST localhost:8080/v1/chat/completions</code> or start a Benchmark.
+        </div>
+      </div>
+    </section>
+
+    <!-- Benchmark tab -->
+    <section id="panel-benchmark" class="panel">
+      <div class="bench-controls card">
+        <h2>Benchmark</h2>
+        <div class="control-row">
+          <label>Scenario</label>
+          <div style="flex:1">
+            <select id="bench-scenario">
+              <option value="baseline">Baseline (all large)</option>
+              <option value="arbiter" selected>Arbiter (auto routing)</option>
+              <option value="round_robin">Round-robin</option>
+            </select>
+            <p id="scenario-hint" class="scenario-hint"></p>
+          </div>
+        </div>
+        <div class="control-row">
+          <label>Users <span id="val-users">10</span></label>
+          <input type="range" id="bench-users" min="1" max="50" value="10" />
+        </div>
+        <div class="control-row">
+          <label>Ramp up / sec <span id="val-ramp">2</span></label>
+          <input type="range" id="bench-ramp" min="1" max="10" value="2" />
+        </div>
+        <div class="control-row">
+          <label>Duration (sec) <span id="val-duration">180</span></label>
+          <input type="range" id="bench-duration" min="30" max="600" step="30" value="180" />
+        </div>
+        <div class="btn-row">
+          <button class="btn primary" id="bench-start">Start</button>
+          <button class="btn" id="bench-stop" disabled>Stop</button>
+        </div>
+        <div id="bench-ramp-bar" class="ramp-bar hidden">
+          <div id="bench-ramp-fill" class="ramp-fill"></div>
+          <span id="bench-ramp-label" class="ramp-label">Spawning workers…</span>
+        </div>
+      </div>
+
+      <div class="bench-stats card">
+        <div class="stat-grid" id="bench-stat-grid">
+          <div class="stat"><span class="stat-label">Requests</span><span class="stat-value" id="stat-requests">0</span></div>
+          <div class="stat"><span class="stat-label">Failures</span><span class="stat-value" id="stat-failures">0</span></div>
+          <div class="stat"><span class="stat-label">RPS</span><span class="stat-value" id="stat-rps">0</span></div>
+          <div class="stat"><span class="stat-label">P50</span><span class="stat-value" id="stat-p50">—</span></div>
+          <div class="stat"><span class="stat-label">P95</span><span class="stat-value" id="stat-p95">—</span></div>
+          <div class="stat"><span class="stat-label">Status</span><span class="stat-value" id="stat-running">idle</span></div>
+        </div>
+        <canvas id="bench-chart" height="120"></canvas>
+      </div>
+    </section>
+
+    <!-- Metrics tab -->
+    <section id="panel-metrics" class="panel">
+      <div id="metrics-banner" class="banner hidden"></div>
+      <div class="metrics-grid">
+        <div class="card chart-card">
+          <h3>Request rate by tier</h3>
+          <canvas id="chart-tier-rate"></canvas>
+        </div>
+        <div class="card chart-card">
+          <h3>Routing reasons (5m)</h3>
+          <canvas id="chart-reasons"></canvas>
+        </div>
+        <div class="card chart-card">
+          <h3>Cost proxy rate</h3>
+          <canvas id="chart-cost"></canvas>
+        </div>
+        <div class="card stat-card">
+          <h3>SLO attainment</h3>
+          <div class="big-stat" id="metric-slo">—</div>
+          <div class="sub-stat" id="metric-slo-detail"></div>
+        </div>
+        <div class="card stat-card">
+          <h3>Bandit convergence</h3>
+          <div class="big-stat" id="metric-bandit">—</div>
+          <div class="sub-stat" id="metric-bandit-obs">No observations yet</div>
+        </div>
+        <div class="card stat-card">
+          <h3>Endpoint health</h3>
+          <div id="metric-endpoints" class="endpoint-list"></div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="compare-bar" id="compare-bar">
+    Compare: run Baseline and Arbiter benchmarks to see side-by-side results here.
+  </footer>
+
+  <!-- Audit modal -->
+  <div id="audit-modal" class="modal hidden">
+    <div class="modal-content card">
+      <div class="modal-header">
+        <h3>Routing audit</h3>
+        <div style="display:flex;gap:0.5rem;align-items:center">
+          <button class="btn" id="audit-copy">Copy JSON</button>
+          <button class="modal-close" id="modal-close">&times;</button>
+        </div>
+      </div>
+      <div id="audit-spinner" class="spinner hidden"></div>
+      <pre id="audit-json"></pre>
+    </div>
+  </div>
+
+  <script src="/console/static/app.js"></script>
+</body>
+</html>

@@ -69,4 +69,9 @@ observability:
   otel_enabled: true
   otel_service_name: inference-arbiter
 
+console:
+  enabled: true
+  prometheus_url: "http://127.0.0.1:9090"
+  event_buffer_size: 500
+
 http_timeout_s: 300.0

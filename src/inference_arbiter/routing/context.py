@@ -163,7 +163,6 @@ class RequestContext:
             "status": self.status,
             "error": self.error,
             "final_tier": self.final_tier,
-            "tier": self.final_tier,
             "final_backend_model": self.final_backend_model,
             "routing_reason": self.routing_reason,
             "degraded": self.degraded,

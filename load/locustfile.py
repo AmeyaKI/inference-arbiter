@@ -1,17 +1,15 @@
 """Locust load test for inference-arbiter.
 
-Run one scenario at a time:
+For interactive benchmarking, use the unified console instead:
 
-  # Scenario 1 — all traffic pinned to large (baseline)
-  locust -f load/locustfile.py BaselineUser --host http://127.0.0.1:8080
+  make dev
+  open http://localhost:8080/console
 
-  # Scenario 2 — round-robin across all tiers (static distribution control)
-  locust -f benchmarks/locustfile.py RoundRobinUser --host http://127.0.0.1:8080
+Headless CI / advanced usage:
 
-  # Scenario 3 — complexity-based auto-routing via inference-arbiter
-  locust -f benchmarks/locustfile.py ArbiterUser --host http://127.0.0.1:8080
-
-Compare P50/P95/P99 latency and RPS across all three to quantify routing benefit.
+  make bench SCENARIO=baseline USERS=10 DURATION=3m
+  make bench SCENARIO=arbiter
+  make bench SCENARIO=round_robin
 """
 
 from __future__ import annotations
@@ -21,38 +19,19 @@ import random
 
 from locust import HttpUser, between, task
 
-SIMPLE_PROMPTS = [
-    "What is the capital of France?",
-    "How many days are in a leap year?",
-    "Define photosynthesis in one sentence.",
+from inference_arbiter.benchmark.prompts import (
+    COMPLEX_PROMPTS,
+    MEDIUM_PROMPTS,
+    SIMPLE_PROMPTS,
+    mixed_prompt,
+)
+
+__all__ = [
+    "ArbiterUser",
+    "BaselineUser",
+    "RoundRobinUser",
+    "mixed_prompt",
 ]
-
-MEDIUM_PROMPTS = [
-    "Summarize the causes of the French Revolution in three paragraphs.",
-    "Explain the difference between TCP and UDP for a junior engineer.",
-    "Describe how gradient descent works without heavy math.",
-]
-
-COMPLEX_PROMPTS = [
-    (
-        "Compare the epistemological frameworks of Kant and Hegel across five dimensions. "
-        "Provide step-by-step reasoning and cite conceptual tradeoffs."
-    ),
-    (
-        "Debug this Python async snippet and prove correctness:\n```python\n"
-        "async def worker():\n    await asyncio.gather(*tasks)\n```"
-    ),
-    "Analyze the time complexity of a nested graph traversal with dynamic programming.",
-]
-
-
-def mixed_prompt() -> str:
-    r = random.random()
-    if r < 0.70:
-        return random.choice(SIMPLE_PROMPTS)
-    if r < 0.90:
-        return random.choice(MEDIUM_PROMPTS)
-    return random.choice(COMPLEX_PROMPTS)
 
 
 class ArbiterUser(HttpUser):
@@ -60,7 +39,10 @@ class ArbiterUser(HttpUser):
 
     @task(7)
     def simple_auto(self):
-        self._chat(mixed_prompt() if random.random() < 0.3 else random.choice(SIMPLE_PROMPTS), "auto")
+        self._chat(
+            mixed_prompt() if random.random() < 0.3 else random.choice(SIMPLE_PROMPTS),
+            "auto",
+        )
 
     @task(2)
     def medium_auto(self):
@@ -94,8 +76,6 @@ class ArbiterUser(HttpUser):
 
 
 class RoundRobinUser(HttpUser):
-    """Cycle through small/medium/large in order — static distribution control scenario."""
-
     wait_time = between(0.1, 0.5)
     _tier_cycle = itertools.cycle(["small", "medium", "large"])
 
@@ -118,8 +98,6 @@ class RoundRobinUser(HttpUser):
 
 
 class BaselineUser(HttpUser):
-    """Pin all traffic to large tier — baseline worst-case scenario."""
-
     wait_time = between(0.1, 0.5)
 
     @task

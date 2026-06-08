@@ -20,12 +20,12 @@ Client → Gateway → Admission → Bandit → Executor → Ollama (1b/3b/8b)
                    shed BATCH          Verifiers + Telemetry → Bandit updater
 ```
 
-| Subsystem | Module | Role |
-|-----------|--------|------|
-| A | `routing/admission.py` | INTERACTIVE/BATCH admission, P95 spike shedding |
-| B | `routing/bandit.py` | LinUCB ranked tier selection, heuristic cold start |
-| C | `routing/executor.py` | SLO cascade loop with `RequestContext` |
-| D | `verification/`, `telemetry/` | Fast verifiers + ring buffer + background updater |
+| Subsystem | Module                        | Role                                               |
+| --------- | ----------------------------- | -------------------------------------------------- |
+| A         | `routing/admission.py`        | INTERACTIVE/BATCH admission, P95 spike shedding    |
+| B         | `routing/bandit.py`           | LinUCB ranked tier selection, heuristic cold start |
+| C         | `routing/executor.py`         | SLO cascade loop with `RequestContext`             |
+| D         | `verification/`, `telemetry/` | Fast verifiers + ring buffer + background updater  |
 
 ## Quickstart
 
@@ -34,12 +34,18 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
 
-docker compose up -d          # Ollama + gateway + Prometheus + Grafana
-make test                     # unit + integration tests
-make run                      # gateway on :8080
+make dev          # starts stack + opens unified console
+make test         # unit + integration tests
 ```
 
-### Chat request
+**One URL for everything:** http://localhost:8080/console
+
+From the console you can:
+- Watch requests route in real time (Live tab)
+- Run Baseline vs Arbiter benchmarks (Benchmark tab)
+- View SLO, cost, and bandit KPIs (Metrics tab)
+
+### Manual chat request
 
 ```bash
 curl -s http://localhost:8080/v1/chat/completions \
@@ -60,30 +66,37 @@ Response headers include `X-Model-Tier`, `X-Routing-Reason`, `X-Tiers-Attempted`
 curl "http://localhost:8080/v1/routing/decisions?request_id=<id>"
 ```
 
+Or click any request in the console Live tab.
+
 ## Configuration
 
 All tunables in [`config.yaml`](config.yaml). Environment overrides use `ARBITER_*` prefix (env wins over YAML).
 
-## Load testing
+## Benchmarking
 
-Three Locust scenarios (70/20/10 prompt mix):
+**Recommended:** use the console Benchmark tab at http://localhost:8080/console
+
+**Headless (CI):**
 
 ```bash
-make load-baseline   # all → largest tier
-make load-arbiter    # full inference-arbiter system
+make bench SCENARIO=baseline USERS=10 DURATION=3m
+make bench SCENARIO=arbiter
+make bench SCENARIO=round_robin
 ```
 
-See [`load/locustfile.py`](load/locustfile.py).
+Legacy aliases: `make load-baseline`, `make load-arbiter`, `make load-round-robin`
 
-## KPIs (Prometheus / Grafana)
+## Advanced observability
 
-- `slo_met_total` / `slo_evaluated_total` — SLO attainment rate
-- `cost_proxy_total` — tier-weighted cost proxy
-- `bandit_policy_active`, `bandit_observations_total` — convergence
+Prometheus and Grafana still run via Docker for power users:
 
-Grafana dashboard: `observability/dashboard/inference-arbiter.json`
+- Prometheus: http://localhost:9090
+- Grafana: http://localhost:3000 (`admin` / `admin`)
+- Dashboard: `deploy/grafana/dashboards/inference-arbiter.json`
 
-## Interview answers (implemented in code)
+The console Metrics tab queries Prometheus on your behalf — you don't need to open Grafana for daily use.
+
+## Code details
 
 1. **Wall-clock SLO across a cascade?** Pre-flight TTFT check in `routing/executor.py` using atomic `RequestContext`.
 2. **Decouple quality vs latency failures?** Three-way `FailureAttribution` in telemetry with separate bandit rewards.
@@ -94,4 +107,6 @@ Grafana dashboard: `observability/dashboard/inference-arbiter.json`
 ```bash
 .venv/bin/pytest tests/ -v
 .venv/bin/ruff check src/
+make run              # gateway only (needs Ollama at :11434)
+make console          # print console URL
 ```

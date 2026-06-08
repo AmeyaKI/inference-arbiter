@@ -12,20 +12,26 @@ RESULTS_DIR.mkdir(exist_ok=True)
 
 
 def main() -> int:
-    """Placeholder eval harness — run Locust scenarios for full KPI proof."""
     results = {
-        "scenarios": [
+        "console_url": "http://localhost:8080/console",
+        "recommended_workflow": [
+            "make dev",
+            "Open http://localhost:8080/console",
+            "Run Baseline then Arbiter from Benchmark tab",
+            "Compare results in footer strip",
+        ],
+        "headless_scenarios": [
             {
                 "name": "baseline_all_large",
-                "command": "locust -f load/locustfile.py BaselineUser --host http://127.0.0.1:8080",
+                "command": "make bench SCENARIO=baseline USERS=10 DURATION=3m",
             },
             {
                 "name": "round_robin",
-                "command": "locust -f load/locustfile.py RoundRobinUser --host http://127.0.0.1:8080",
+                "command": "make bench SCENARIO=round_robin USERS=10 DURATION=3m",
             },
             {
                 "name": "inference_arbiter_full",
-                "command": "locust -f load/locustfile.py ArbiterUser --host http://127.0.0.1:8080",
+                "command": "make bench SCENARIO=arbiter USERS=10 DURATION=3m",
             },
         ],
         "kpis": [
@@ -33,13 +39,12 @@ def main() -> int:
             "cost_proxy_per_million_tokens",
             "bandit_convergence_requests",
         ],
-        "note": "Run each Locust scenario against a live stack, then compare Prometheus KPI metrics.",
+        "note": "Use the unified console for visual benchmarking; Metrics tab queries Prometheus automatically.",
     }
     out = RESULTS_DIR / "latest.json"
     out.write_text(json.dumps(results, indent=2))
     print(f"Wrote eval scaffold to {out}")
-    print("Start stack: docker compose up")
-    print("Run load tests with commands listed in latest.json")
+    print("Recommended: make dev  →  http://localhost:8080/console")
     return 0
 
 

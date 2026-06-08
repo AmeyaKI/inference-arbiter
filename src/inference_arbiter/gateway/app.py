@@ -13,11 +13,14 @@ from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from inference_arbiter.config import build_default_endpoints, get_settings
+from inference_arbiter.benchmark.runner import BenchmarkRunner
+from inference_arbiter.console.routes import create_console_router
 from inference_arbiter.endpoints.client import BackendClient
 from inference_arbiter.gateway.models import ChatCompletionRequest, ModelCard, ModelListResponse
 from inference_arbiter.models import DegradationReason, FailureAttribution, ModelTier
 from inference_arbiter.gateway.middleware import RequestContextMiddleware
 from inference_arbiter.observability.audit import AuditStore
+from inference_arbiter.observability.events import RoutingEventBus, build_routing_event
 from inference_arbiter.observability.tracer import init_tracer, routing_span
 from inference_arbiter.routing.admission import AdmissionController
 from inference_arbiter.routing.bandit import LinUCBBandit
@@ -62,6 +65,10 @@ class AppState:
         self.admission = AdmissionController(self.registry, self.settings)
         self.priority_gate = self.admission
         self.audit = AuditStore(max_records=self.settings.audit_max_records)
+        self.event_bus = RoutingEventBus(buffer_size=self.settings.event_buffer_size)
+        self.benchmark_runner = BenchmarkRunner(
+            base_url=f"http://127.0.0.1:{self.settings.port}"
+        )
         self.ring_buffer = TelemetryRingBuffer(max_size=self.settings.ring_buffer_size)
         self.bandit_updater: BanditUpdater | None = None
         self.http_client: httpx.AsyncClient | None = None
@@ -111,6 +118,7 @@ def create_app() -> FastAPI:
         return {
             "service": "inference-arbiter",
             "status": "running",
+            "console": "/console",
             "docs": "/docs",
             "health": "/healthz",
             "metrics": "/metrics",
@@ -126,6 +134,31 @@ def create_app() -> FastAPI:
             "routing_mode": st.settings.routing_mode.value,
             "bandit_policy_active": st.bandit.policy_active,
         }
+
+    @app.get("/readyz")
+    async def readyz():
+        import asyncio
+        st = app.state.arbiter
+
+        async def probe_tier(tier: ModelTier) -> dict:
+            ep = st.registry.by_tier(tier)
+            url = ep.config.base_url.rstrip("/") + "/models"
+            try:
+                r = await st.http_client.get(url, timeout=2.0)
+                ok = r.status_code < 500
+            except Exception:
+                ok = False
+            return {"tier": tier.value, "model": ep.config.backend_model, "ready": ok}
+
+        results = await asyncio.gather(
+            *[probe_tier(t) for t in ModelTier], return_exceptions=False
+        )
+        tiers = list(results)
+        all_ready = all(t["ready"] for t in tiers)
+        return JSONResponse(
+            status_code=200 if all_ready else 503,
+            content={"ready": all_ready, "tiers": tiers},
+        )
 
     @app.get("/metrics")
     async def metrics():
@@ -173,6 +206,11 @@ def create_app() -> FastAPI:
             admission = await state.admission.admit(body.x_priority)
             if not admission.admitted:
                 record_batch_shed()
+                ctx.status = "shed"
+                ctx.failure_attribution = FailureAttribution.INFRASTRUCTURE_FAILURE
+                ctx.degraded = True
+                ctx.degradation_reason = DegradationReason.BATCH_SHED.value
+                state.audit.put(ctx)
                 return JSONResponse(
                     status_code=503,
                     content={
@@ -217,6 +255,13 @@ def create_app() -> FastAPI:
             except HTTPException:
                 ctx.status = "failed"
                 state.audit.put(ctx)
+                await state.event_bus.publish(
+                    build_routing_event(
+                        ctx,
+                        bandit_decision=bandit_decision,
+                        priority=traffic.value,
+                    )
+                )
                 raise
 
         ctx = result.ctx
@@ -243,6 +288,13 @@ def create_app() -> FastAPI:
 
         record_cost_proxy(result.tier.value, cost_proxy)
         state.audit.put(ctx)
+        await state.event_bus.publish(
+            build_routing_event(
+                ctx,
+                bandit_decision=bandit_decision,
+                priority=traffic.value,
+            )
+        )
         sync_endpoint_gauges(state.registry)
 
         failure_attr = ctx.failure_attribution.value if ctx.failure_attribution else "NONE"
@@ -291,6 +343,25 @@ def create_app() -> FastAPI:
             response.headers.update(headers)
             return response
         return JSONResponse(content=response, headers=headers)
+
+    if app.state.arbiter.settings.console_enabled:
+        st = app.state.arbiter
+
+        async def console_health():
+            return {
+                "status": "ok",
+                "routing_mode": st.settings.routing_mode.value,
+                "bandit_policy_active": st.bandit.policy_active,
+            }
+
+        console_router = create_console_router(
+            event_bus=st.event_bus,
+            benchmark_runner=st.benchmark_runner,
+            prometheus_url=st.settings.prometheus_url,
+            get_audit_record=st.audit.get,
+            get_health=console_health,
+        )
+        app.include_router(console_router)
 
     return app
 

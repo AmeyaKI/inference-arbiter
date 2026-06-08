@@ -56,6 +56,7 @@ class DegradationReason(StrEnum):
     MODEL_CAPACITY = "MODEL_CAPACITY"
     DEADLINE_TOO_TIGHT = "DEADLINE_TOO_TIGHT"
     CIRCUIT_OPEN = "CIRCUIT_OPEN"
+    BATCH_SHED = "BATCH_SHED"
 
 
 class CircuitBreakerState(StrEnum):

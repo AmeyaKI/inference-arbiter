@@ -74,6 +74,10 @@ class Settings(BaseSettings):
     otel_enabled: bool = True
     otel_service_name: str = "inference-arbiter"
 
+    console_enabled: bool = True
+    prometheus_url: str = "http://127.0.0.1:9090"
+    event_buffer_size: int = 500
+
 
 def _load_yaml_defaults() -> dict[str, Any]:
     if not _CONFIG_PATH.exists():
@@ -149,6 +153,13 @@ def _load_yaml_defaults() -> dict[str, Any]:
         flat["otel_enabled"] = observability["otel_enabled"]
     if "otel_service_name" in observability:
         flat["otel_service_name"] = observability["otel_service_name"]
+    console = data.get("console", {})
+    if "enabled" in console:
+        flat["console_enabled"] = console["enabled"]
+    if "prometheus_url" in console:
+        flat["prometheus_url"] = console["prometheus_url"]
+    if "event_buffer_size" in console:
+        flat["event_buffer_size"] = console["event_buffer_size"]
     if "http_timeout_s" in data:
         flat["http_timeout_s"] = data["http_timeout_s"]
     flat["_yaml_endpoints"] = data.get("endpoints", [])
