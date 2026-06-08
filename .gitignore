@@ -25,6 +25,9 @@ htmlcov/
 # Benchmark artifacts
 benchmarks/results/
 
+# Dev entry points (tracked)
+# arbiter        — interactive control plane (repo root)
+# scripts/dev.sh — stack bootstrap
 
 # local
 .archive/

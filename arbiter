@@ -1,0 +1,226 @@
+#!/usr/bin/env bash
+# arbiter — inference-arbiter interactive control plane
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$ROOT"
+
+GW="${ARBITER_URL:-http://localhost:8080}"
+
+# ── colors (degraded gracefully if no tty) ────────────────────
+if [ -t 1 ]; then
+  B=$'\033[1m'; D=$'\033[2m'; R=$'\033[0m'
+  GRN=$'\033[32m'; YLW=$'\033[33m'; RED=$'\033[31m'; BLU=$'\033[34m'
+else
+  B=''; D=''; R=''; GRN=''; YLW=''; RED=''; BLU=''
+fi
+
+# ── gateway status line ───────────────────────────────────────
+
+gw_status() {
+  if HEALTH=$(curl -sf --max-time 2 "$GW/healthz" 2>/dev/null); then
+    MODE=$(python3 -c "import sys,json; print(json.loads(sys.argv[1]).get('routing_mode','?'))" "$HEALTH" 2>/dev/null || echo "?")
+    echo -e "  ${GRN}●${R} gateway   ${D}$GW${R}  mode=${MODE}"
+  else
+    echo -e "  ${RED}●${R} gateway   ${D}offline${R}"
+  fi
+}
+
+# ── menu ──────────────────────────────────────────────────────
+
+show_menu() {
+  clear
+  echo
+  echo -e "  ${B}inference-arbiter${R}  ${D}routing control plane${R}"
+  echo
+  gw_status
+  echo
+  echo -e "  ${D}── stack ─────────────────────────────────────────${R}"
+  echo -e "  ${B}1${R}  start      spin up docker stack + open console"
+  echo -e "  ${B}2${R}  stop       shut down all services"
+  echo -e "  ${B}3${R}  rebuild    rebuild images + restart"
+  echo -e "  ${B}4${R}  status     gateway + per-model readiness"
+  echo -e "  ${B}5${R}  logs       tail gateway logs"
+  echo
+  echo -e "  ${D}── benchmark ─────────────────────────────────────${R}"
+  echo -e "  ${B}6${R}  compare    quick baseline vs arbiter  (2 users · 60s)"
+  echo -e "  ${B}7${R}  bench      full run                   (10 users · 3 min)"
+  echo
+  echo -e "  ${D}── debug ─────────────────────────────────────────${R}"
+  echo -e "  ${B}8${R}  test       send one auto-routed request"
+  echo -e "  ${B}9${R}  console    open console in browser"
+  echo -e "  ${B}0${R}  exit"
+  echo
+  printf "  ${D}→${R} "
+}
+
+# ── commands ──────────────────────────────────────────────────
+
+cmd_start() {
+  echo -e "\n  ${B}Starting stack…${R}"
+  bash scripts/dev.sh
+}
+
+cmd_stop() {
+  echo -e "\n  ${B}Stopping…${R}"
+  docker compose down
+  echo -e "  ${GRN}Done.${R}"
+  read -rp $'\n  Press enter…' _
+}
+
+cmd_rebuild() {
+  echo -e "\n  ${B}Rebuilding images…${R}"
+  docker compose up -d --build
+  echo -e "  ${GRN}Done.${R} Gateway restarting — check: curl $GW/healthz"
+  read -rp $'\n  Press enter…' _
+}
+
+cmd_status() {
+  echo -e "\n  ${B}Status${R}\n"
+
+  if HEALTH=$(curl -sf --max-time 3 "$GW/healthz" 2>/dev/null); then
+    MODE=$(  python3 -c "import sys,json; d=json.loads(sys.argv[1]); print(d.get('routing_mode','?'))"         "$HEALTH" 2>/dev/null || echo "?")
+    BANDIT=$(python3 -c "import sys,json; d=json.loads(sys.argv[1]); print('active' if d.get('bandit_policy_active') else 'heuristic')" "$HEALTH" 2>/dev/null || echo "?")
+    echo -e "  ${GRN}●${R} gateway    mode=${B}${MODE}${R}  bandit=${B}${BANDIT}${R}"
+  else
+    echo -e "  ${RED}●${R} gateway    offline"
+  fi
+
+  if READY=$(curl -sf --max-time 3 "$GW/readyz" 2>/dev/null); then
+    python3 - "$READY" <<'PY'
+import sys, json
+try:
+    d = json.loads(sys.argv[1])
+    for t in d.get("tiers", []):
+        icon = "\033[32m●\033[0m" if t["ready"] else "\033[31m●\033[0m"
+        print(f"  {icon} {t['tier']:<8} {t['model']}")
+except Exception as e:
+    print(f"  (parse error: {e})")
+PY
+  else
+    echo -e "  ${YLW}⚠${R}  /readyz not found — rebuild to pick up latest image"
+  fi
+
+  echo
+  read -rp "  Press enter…" _
+}
+
+cmd_logs() {
+  echo -e "\n  ${D}Ctrl+C to exit${R}\n"
+  docker compose logs -f gateway
+}
+
+cmd_compare() {
+  echo -e "\n  ${B}Quick comparison${R}  ${D}2 users · 60s each${R}\n"
+  echo -e "  ${D}[1/2] Baseline (all large)…${R}"
+  make bench SCENARIO=baseline USERS=2 DURATION=60 2>/dev/null || \
+    echo -e "  ${YLW}Skipped — Locust not installed (make install)${R}"
+  echo
+  echo -e "  ${D}[2/2] Arbiter (auto routing)…${R}"
+  make bench SCENARIO=arbiter USERS=2 DURATION=60 2>/dev/null || \
+    echo -e "  ${YLW}Skipped — Locust not installed (make install)${R}"
+  echo
+  echo -e "  ${GRN}Done.${R} Open console for comparison: ${BLU}$GW/console${R}"
+  read -rp $'\n  Press enter…' _
+}
+
+cmd_bench() {
+  echo -e "\n  ${B}Full benchmark${R}  ${D}10 users · 3 min${R}\n"
+  echo -e "  ${D}1${R}  baseline    all large model"
+  echo -e "  ${D}2${R}  arbiter     auto routing"
+  echo -e "  ${D}3${R}  round-robin equal distribution"
+  echo -e "  ${D}4${R}  all three   sequential"
+  echo
+  printf "  ${D}→${R} "
+  read -r sub
+  case "$sub" in
+    1) make bench SCENARIO=baseline    USERS=10 DURATION=180 ;;
+    2) make bench SCENARIO=arbiter     USERS=10 DURATION=180 ;;
+    3) make bench SCENARIO=round_robin USERS=10 DURATION=180 ;;
+    4)
+      make bench SCENARIO=baseline    USERS=10 DURATION=180
+      make bench SCENARIO=arbiter     USERS=10 DURATION=180
+      make bench SCENARIO=round_robin USERS=10 DURATION=180
+      ;;
+    *) echo -e "  ${D}Cancelled.${R}" ;;
+  esac
+  read -rp $'\n  Press enter…' _
+}
+
+cmd_test() {
+  echo -e "\n  ${B}Sending test request…${R}\n"
+
+  TMPFILE=$(mktemp)
+  HTTP_CODE=$(curl -s -o "$TMPFILE" -w "%{http_code}" \
+    --max-time 30 \
+    -H "Content-Type: application/json" \
+    -H "X-Request-ID: arbiter-cli-test" \
+    "$GW/v1/chat/completions" \
+    -d '{"model":"auto","messages":[{"role":"user","content":"Say hello in exactly one sentence."}]}' \
+    2>/dev/null || echo "000")
+
+  if [ "$HTTP_CODE" = "200" ]; then
+    python3 - "$TMPFILE" <<'PY'
+import sys, json
+try:
+    with open(sys.argv[1]) as f:
+        d = json.load(f)
+    text = d.get("choices", [{}])[0].get("message", {}).get("content", "")
+    print(f"  Response: {text[:200]}")
+except Exception as e:
+    print(f"  (could not parse response: {e})")
+PY
+    echo
+    # Routing headers via a HEAD-style trick — re-request to get headers printed
+    HEADERS=$(curl -sD - --max-time 10 \
+      -H "Content-Type: application/json" \
+      -H "X-Request-ID: arbiter-cli-headers" \
+      "$GW/v1/chat/completions" \
+      -d '{"model":"auto","messages":[{"role":"user","content":"hi"}]}' \
+      -o /dev/null 2>/dev/null \
+      | grep -i "x-model-tier\|x-routing-reason\|x-tiers-attempted\|x-elapsed" || true)
+    if [ -n "$HEADERS" ]; then
+      echo -e "  ${D}Routing headers:${R}"
+      echo "$HEADERS" | while IFS= read -r line; do echo "    $line"; done
+    fi
+  else
+    echo -e "  ${RED}HTTP $HTTP_CODE${R}"
+    cat "$TMPFILE" | head -5
+  fi
+
+  rm -f "$TMPFILE"
+  echo
+  read -rp "  Press enter…" _
+}
+
+cmd_console() {
+  echo -e "\n  Opening ${BLU}$GW/console${R}"
+  if [[ "$(uname)" == "Darwin" ]]; then
+    open "$GW/console" 2>/dev/null || true
+  elif command -v xdg-open &>/dev/null; then
+    xdg-open "$GW/console" &>/dev/null || true
+  else
+    echo -e "  ${YLW}Open manually:${R} $GW/console"
+  fi
+  sleep 1
+}
+
+# ── main loop ─────────────────────────────────────────────────
+
+while true; do
+  show_menu
+  read -r choice </dev/tty 2>/dev/null || read -r choice
+  case "$choice" in
+    1) cmd_start   ;;
+    2) cmd_stop    ;;
+    3) cmd_rebuild ;;
+    4) cmd_status  ;;
+    5) cmd_logs    ;;
+    6) cmd_compare ;;
+    7) cmd_bench   ;;
+    8) cmd_test    ;;
+    9) cmd_console ;;
+    0|q|quit|exit) echo; exit 0 ;;
+    *) ;;
+  esac
+done

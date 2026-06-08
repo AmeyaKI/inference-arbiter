@@ -3,148 +3,247 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>inference-arbiter console</title>
+  <title>inference-arbiter</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,400;0,14..32,500;0,14..32,600;0,14..32,700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/console/static/styles.css" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
 </head>
 <body>
-  <header class="header">
-    <div class="brand">
-      <h1>inference-arbiter</h1>
-      <span class="subtitle">unified console</span>
+
+<!-- Header -->
+<header class="header">
+  <div class="brand">
+    <span class="brand-name">inference-arbiter</span>
+    <span class="brand-sep">/</span>
+    <span class="brand-sub">routing console</span>
+  </div>
+  <div class="status-row">
+    <div class="status-item">
+      <div class="status-dot" id="dot-gateway"></div>
+      <span id="lbl-gateway">connecting…</span>
     </div>
-    <div class="status-pills" id="status-pills">
-      <span class="pill" id="pill-gateway">gateway …</span>
-      <span class="pill" id="pill-bandit">bandit …</span>
+    <div class="status-item">
+      <div class="status-dot" id="dot-bandit"></div>
+      <span id="lbl-bandit">bandit …</span>
     </div>
-  </header>
+  </div>
+</header>
 
-  <nav class="tabs">
-    <button class="tab active" data-tab="live">Live</button>
-    <button class="tab" data-tab="benchmark">Benchmark</button>
-    <button class="tab" data-tab="metrics">Metrics</button>
-  </nav>
+<!-- Tabs -->
+<nav class="tabs">
+  <button class="tab active" data-tab="live">
+    <i data-lucide="radio" width="13" height="13"></i>
+    Live
+  </button>
+  <button class="tab" data-tab="benchmark">
+    <i data-lucide="bar-chart-2" width="13" height="13"></i>
+    Benchmark
+    <span class="tab-badge hidden" id="bench-badge">✓</span>
+  </button>
+  <button class="tab" data-tab="metrics">
+    <i data-lucide="layout-dashboard" width="13" height="13"></i>
+    Metrics
+  </button>
+</nav>
 
-  <main>
-    <!-- Live tab -->
-    <section id="panel-live" class="panel active">
-      <div class="panel-header">
-        <h2>Live routing</h2>
-        <div style="display:flex;align-items:center;gap:0.75rem">
-          <span class="sse-badge hidden" id="sse-status">↩ reconnecting…</span>
-          <span class="hint">Real-time request feed via SSE — click any row for full audit</span>
-        </div>
+<main>
+
+  <!-- ── Live tab ── -->
+  <section id="panel-live" class="panel active">
+    <div class="section-header">
+      <span class="section-title">Live routing</span>
+      <div class="section-meta">
+        <span class="sse-badge hidden" id="sse-status">
+          <i data-lucide="refresh-cw" width="10" height="10"></i>
+          reconnecting
+        </span>
+        <span>click any row for full audit</span>
       </div>
-      <div id="live-feed" class="live-feed">
-        <div id="live-empty" class="live-empty">
-          Waiting for requests… Send a request to <code>POST localhost:8080/v1/chat/completions</code> or start a Benchmark.
-        </div>
-      </div>
-    </section>
+    </div>
 
-    <!-- Benchmark tab -->
-    <section id="panel-benchmark" class="panel">
-      <div class="bench-controls card">
-        <h2>Benchmark</h2>
-        <div class="control-row">
-          <label>Scenario</label>
-          <div style="flex:1">
+    <div class="feed-cols">
+      <span>Tier</span>
+      <span>Prompt</span>
+      <span>Route · Reason</span>
+      <span style="text-align:right">Latency</span>
+    </div>
+
+    <div id="live-feed" class="live-feed">
+      <div id="feed-empty" class="feed-empty">
+        <i data-lucide="radio" width="32" height="32"></i>
+        <span>Waiting for requests</span>
+        <code>curl localhost:8080/v1/chat/completions -d '{"model":"auto","messages":[...]}'</code>
+        <span style="font-size:11px;color:var(--text-3)">or start a Benchmark →</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Benchmark tab ── -->
+  <section id="panel-benchmark" class="panel">
+    <div class="bench-layout">
+
+      <!-- Left: controls -->
+      <div class="bench-controls">
+        <div class="card">
+          <div class="card-label">Configuration</div>
+
+          <div class="field-row">
+            <div class="field-label"><span>Scenario</span></div>
             <select id="bench-scenario">
-              <option value="baseline">Baseline (all large)</option>
-              <option value="arbiter" selected>Arbiter (auto routing)</option>
+              <option value="baseline">Baseline — all large</option>
+              <option value="arbiter" selected>Arbiter — auto routing</option>
               <option value="round_robin">Round-robin</option>
             </select>
             <p id="scenario-hint" class="scenario-hint"></p>
           </div>
-        </div>
-        <div class="control-row">
-          <label>Users <span id="val-users">10</span></label>
-          <input type="range" id="bench-users" min="1" max="50" value="10" />
-        </div>
-        <div class="control-row">
-          <label>Ramp up / sec <span id="val-ramp">2</span></label>
-          <input type="range" id="bench-ramp" min="1" max="10" value="2" />
-        </div>
-        <div class="control-row">
-          <label>Duration (sec) <span id="val-duration">180</span></label>
-          <input type="range" id="bench-duration" min="30" max="600" step="30" value="180" />
-        </div>
-        <div class="btn-row">
-          <button class="btn primary" id="bench-start">Start</button>
-          <button class="btn" id="bench-stop" disabled>Stop</button>
-        </div>
-        <div id="bench-ramp-bar" class="ramp-bar hidden">
-          <div id="bench-ramp-fill" class="ramp-fill"></div>
-          <span id="bench-ramp-label" class="ramp-label">Spawning workers…</span>
+
+          <div class="field-row">
+            <div class="field-label">
+              <span>Concurrent users</span>
+              <span class="field-val" id="val-users">10</span>
+            </div>
+            <input type="range" id="bench-users" min="1" max="50" value="10" />
+          </div>
+
+          <div class="field-row">
+            <div class="field-label">
+              <span>Ramp / sec</span>
+              <span class="field-val" id="val-ramp">2</span>
+            </div>
+            <input type="range" id="bench-ramp" min="1" max="10" value="2" />
+          </div>
+
+          <div class="field-row">
+            <div class="field-label">
+              <span>Duration</span>
+              <span class="field-val" id="val-duration">180s</span>
+            </div>
+            <input type="range" id="bench-duration" min="30" max="600" step="30" value="180" />
+          </div>
+
+          <div class="btn-row">
+            <button class="btn btn-primary" id="bench-start">
+              <i data-lucide="play" width="12" height="12"></i>
+              Start
+            </button>
+            <button class="btn btn-stop" id="bench-stop" disabled>
+              <i data-lucide="square" width="11" height="11"></i>
+              Stop
+            </button>
+          </div>
+
+          <div id="ramp-wrap" class="ramp-wrap hidden">
+            <div class="ramp-bar"><div id="ramp-fill" class="ramp-fill"></div></div>
+            <span id="ramp-label" class="ramp-label">Spawning workers…</span>
+          </div>
         </div>
       </div>
 
-      <div class="bench-stats card">
-        <div class="stat-grid" id="bench-stat-grid">
-          <div class="stat"><span class="stat-label">Requests</span><span class="stat-value" id="stat-requests">0</span></div>
-          <div class="stat"><span class="stat-label">Failures</span><span class="stat-value" id="stat-failures">0</span></div>
-          <div class="stat"><span class="stat-label">RPS</span><span class="stat-value" id="stat-rps">0</span></div>
-          <div class="stat"><span class="stat-label">P50</span><span class="stat-value" id="stat-p50">—</span></div>
-          <div class="stat"><span class="stat-label">P95</span><span class="stat-value" id="stat-p95">—</span></div>
-          <div class="stat"><span class="stat-label">Status</span><span class="stat-value" id="stat-running">idle</span></div>
+      <!-- Right: stats + chart + comparison -->
+      <div class="bench-right">
+        <div class="stat-grid">
+          <div class="stat-cell">
+            <div class="stat-label">Requests</div>
+            <div class="stat-value" id="stat-requests">—</div>
+          </div>
+          <div class="stat-cell">
+            <div class="stat-label">RPS</div>
+            <div class="stat-value" id="stat-rps">—</div>
+          </div>
+          <div class="stat-cell">
+            <div class="stat-label">Failures</div>
+            <div class="stat-value" id="stat-failures">—</div>
+          </div>
+          <div class="stat-cell">
+            <div class="stat-label">P50</div>
+            <div class="stat-value" id="stat-p50">—</div>
+          </div>
+          <div class="stat-cell">
+            <div class="stat-label">P95</div>
+            <div class="stat-value" id="stat-p95">—</div>
+          </div>
+          <div class="stat-cell">
+            <div class="stat-label">Status</div>
+            <div class="stat-value muted" id="stat-running">idle</div>
+          </div>
         </div>
-        <canvas id="bench-chart" height="120"></canvas>
-      </div>
-    </section>
 
-    <!-- Metrics tab -->
-    <section id="panel-metrics" class="panel">
-      <div id="metrics-banner" class="banner hidden"></div>
-      <div class="metrics-grid">
-        <div class="card chart-card">
-          <h3>Request rate by tier</h3>
-          <canvas id="chart-tier-rate"></canvas>
+        <div class="chart-wrap">
+          <div class="card-label">Requests / second</div>
+          <canvas id="bench-chart"></canvas>
         </div>
-        <div class="card chart-card">
-          <h3>Routing reasons (5m)</h3>
-          <canvas id="chart-reasons"></canvas>
-        </div>
-        <div class="card chart-card">
-          <h3>Cost proxy rate</h3>
-          <canvas id="chart-cost"></canvas>
-        </div>
-        <div class="card stat-card">
-          <h3>SLO attainment</h3>
-          <div class="big-stat" id="metric-slo">—</div>
-          <div class="sub-stat" id="metric-slo-detail"></div>
-        </div>
-        <div class="card stat-card">
-          <h3>Bandit convergence</h3>
-          <div class="big-stat" id="metric-bandit">—</div>
-          <div class="sub-stat" id="metric-bandit-obs">No observations yet</div>
-        </div>
-        <div class="card stat-card">
-          <h3>Endpoint health</h3>
-          <div id="metric-endpoints" class="endpoint-list"></div>
+
+        <div id="compare-card" class="compare-card hidden">
+          <div class="card-label">Comparison</div>
+          <div class="compare-table" id="compare-table"><!-- injected --></div>
         </div>
       </div>
-    </section>
-  </main>
 
-  <footer class="compare-bar" id="compare-bar">
-    Compare: run Baseline and Arbiter benchmarks to see side-by-side results here.
-  </footer>
+    </div>
+  </section>
 
-  <!-- Audit modal -->
-  <div id="audit-modal" class="modal hidden">
-    <div class="modal-content card">
-      <div class="modal-header">
-        <h3>Routing audit</h3>
-        <div style="display:flex;gap:0.5rem;align-items:center">
-          <button class="btn" id="audit-copy">Copy JSON</button>
-          <button class="modal-close" id="modal-close">&times;</button>
+  <!-- ── Metrics tab ── -->
+  <section id="panel-metrics" class="panel">
+    <div id="metrics-banner" class="banner hidden"></div>
+    <div class="metrics-layout">
+      <div class="metric-card">
+        <div class="card-label">Request rate by tier</div>
+        <canvas id="chart-tier-rate" style="max-height:180px"></canvas>
+      </div>
+      <div class="metric-card">
+        <div class="card-label">Routing decisions (5m)</div>
+        <canvas id="chart-reasons" style="max-height:180px"></canvas>
+      </div>
+      <div class="metric-card">
+        <div class="card-label">Cost proxy rate</div>
+        <canvas id="chart-cost" style="max-height:180px"></canvas>
+      </div>
+      <div class="metric-card">
+        <div class="card-label">SLO attainment</div>
+        <div class="big-num" id="metric-slo">—</div>
+        <div class="sub-text" id="metric-slo-detail"></div>
+      </div>
+      <div class="metric-card">
+        <div class="card-label">Bandit convergence</div>
+        <div style="font-family:var(--mono);font-size:18px;font-weight:700;margin-bottom:12px" id="metric-bandit">—</div>
+        <div id="metric-bandit-obs"></div>
+      </div>
+      <div class="metric-card">
+        <div class="card-label">Endpoint health</div>
+        <div id="metric-endpoints" class="ep-list">
+          <span class="sub-text">No data</span>
         </div>
       </div>
+    </div>
+  </section>
+
+</main>
+
+<!-- Audit modal -->
+<div id="audit-modal" class="modal hidden">
+  <div class="modal-box">
+    <div class="modal-head">
+      <span class="modal-title">Routing audit</span>
+      <div class="modal-actions">
+        <button class="btn btn-sm" id="audit-copy">
+          <i data-lucide="copy" width="11" height="11"></i>
+          Copy
+        </button>
+        <button class="icon-btn" id="modal-close">
+          <i data-lucide="x" width="14" height="14"></i>
+        </button>
+      </div>
+    </div>
+    <div class="modal-body">
       <div id="audit-spinner" class="spinner hidden"></div>
       <pre id="audit-json"></pre>
     </div>
   </div>
+</div>
 
-  <script src="/console/static/app.js"></script>
+<script src="/console/static/app.js"></script>
 </body>
 </html>

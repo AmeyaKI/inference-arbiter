@@ -1,4 +1,5 @@
-.PHONY: install test eval run dev up down console bench load-baseline load-arbiter load-round-robin
+.PHONY: install test eval run dev up down console bench load-baseline load-arbiter load-round-robin \
+        start stop rebuild status compare request logs menu
 
 HOST ?= http://127.0.0.1:8080
 USERS ?= 10
@@ -21,6 +22,9 @@ run:
 
 dev:
 	@bash scripts/dev.sh
+
+menu:
+	@./arbiter
 
 up:
 	docker compose up -d
@@ -49,3 +53,34 @@ load-arbiter:
 
 load-round-robin:
 	$(MAKE) bench SCENARIO=round_robin
+
+# ── intuitive shortcuts ──────────────────────────────────────
+
+start:
+	@bash scripts/dev.sh
+
+stop:
+	@docker compose down
+
+rebuild:
+	@docker compose up -d --build
+	@echo "  Rebuilt. Check: curl localhost:8080/healthz"
+
+status:
+	@echo "=== gateway ===" && curl -s localhost:8080/healthz | python3 -m json.tool 2>/dev/null || echo "offline"
+	@echo "=== readyz ===" && curl -s localhost:8080/readyz | python3 -m json.tool 2>/dev/null || echo "not found"
+
+compare:
+	@echo "--- baseline (2 users, 60s) ---"
+	@$(MAKE) bench SCENARIO=baseline USERS=2 DURATION=60
+	@echo "--- arbiter (2 users, 60s) ---"
+	@$(MAKE) bench SCENARIO=arbiter USERS=2 DURATION=60
+
+request:
+	@curl -s localhost:8080/v1/chat/completions \
+		-H "Content-Type: application/json" \
+		-d '{"model":"auto","messages":[{"role":"user","content":"Say hello in one sentence."}]}' \
+		| python3 -m json.tool
+
+logs:
+	@docker compose logs -f gateway

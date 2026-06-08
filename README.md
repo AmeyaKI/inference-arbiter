@@ -34,6 +34,7 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
 
+./arbiter         # interactive menu (stack, bench, debug)
 make dev          # starts stack + opens unified console
 make test         # unit + integration tests
 ```
@@ -105,6 +106,7 @@ The console Metrics tab queries Prometheus on your behalf — you don't need to 
 ## Development
 
 ```bash
+./arbiter             # interactive control plane (or: make menu)
 .venv/bin/pytest tests/ -v
 .venv/bin/ruff check src/
 make run              # gateway only (needs Ollama at :11434)
