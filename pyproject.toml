@@ -31,6 +31,7 @@ dev = [
 
 [project.scripts]
 inference-arbiter = "inference_arbiter.main:run"
+arbiter = "inference_arbiter.cli:run"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/inference_arbiter"]

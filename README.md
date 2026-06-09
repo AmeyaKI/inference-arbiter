@@ -1,118 +1,292 @@
 # inference-arbiter
 
-OpenAI-compatible LLM inference gateway with **deadline-aware cascade routing** and **online contextual bandit learning** from production telemetry.
+OpenAI-compatible LLM inference gateway with **deadline-aware cascade routing** and **online contextual bandit learning**.
 
-## Positioning
+Routes `POST /v1/chat/completions` across three Ollama model tiers (1b / 3b / 8b) using admission control, a LinUCB contextual bandit, SLO-budget-decay cascade execution, and online reward learning from live telemetry.
 
-RouteLLM and PROTEUS/SCORE are research papers with no production implementation. LiteLLM and Bifrost are production gateways with no routing intelligence. **inference-arbiter combines both**: circuit breakers, priority shedding, streaming SSE, and adaptive routing that enforces wall-clock SLO deadlines while learning from live latency signals.
-
-### Three novel open-source claims
-
-1. **SLO-budget-decay enforcement** — `T_remaining = deadline - elapsed` checked before each tier invocation; escalation only when verifier rejects and budget permits.
-2. **Active batch shedding at the router layer** — BATCH traffic gets 503 + Retry-After under saturation; INTERACTIVE is restricted to non-saturated tiers.
-3. **Online LinUCB bandit** — learns from production telemetry tuples, not offline Arena labels.
-
-## Architecture
-
-```
-Client → Gateway → Admission → Bandit → Executor → Ollama (1b/3b/8b)
-                      ↓                      ↓
-                   shed BATCH          Verifiers + Telemetry → Bandit updater
-```
-
-
-| Subsystem | Module                        | Role                                               |
-| --------- | ----------------------------- | -------------------------------------------------- |
-| A         | `routing/admission.py`        | INTERACTIVE/BATCH admission, P95 spike shedding    |
-| B         | `routing/bandit.py`           | LinUCB ranked tier selection, heuristic cold start |
-| C         | `routing/executor.py`         | SLO cascade loop with `RequestContext`             |
-| D         | `verification/`, `telemetry/` | Fast verifiers + ring buffer + background updater  |
-
+---
 
 ## Quickstart
 
+**Requirements:** Docker, Docker Compose, Python 3.11+, ~8GB RAM for the three models.
+
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
+# 1. Clone and set up the Python environment
+git clone https://github.com/your-org/inference-arbiter
+cd inference-arbiter
+python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 
-bash scripts/arbiter   # interactive CLI (stack, bench, debug)
-make dev          # starts stack + opens unified console
-make test         # unit + integration tests
+# 2. Start the full stack (pulls models on first run — takes a few minutes)
+make start        # or: arbiter → start
 ```
 
-**One URL for everything:** [http://localhost:8080/console](http://localhost:8080/console)
+That's it. The console opens automatically at **http://localhost:8080/console**.
 
-From the console you can:
+**Entry points** (all installed by `pip install -e ".[dev]"`):
 
-- Watch requests route in real time (Live tab)
-- Run Baseline vs Arbiter benchmarks (Benchmark tab)
-- View SLO, cost, and bandit KPIs (Metrics tab)
+| Command | What it does |
+|---|---|
+| `arbiter` | Interactive terminal REPL — stack control, benchmarks, debug |
+| `make start` / `make dev` | Non-interactive stack bootstrap (same as `arbiter start`) |
+| `inference-arbiter` | Run the gateway directly (no Docker; needs Ollama at `:11434`) |
 
-### Manual chat request
+---
+
+## The Console
+
+Everything is accessible from one URL: **http://localhost:8080/console**
+
+| Tab | What it shows |
+|---|---|
+| **Live** | Every request as it routes in real time. Click any row for the full audit trail. |
+| **Benchmark** | Built-in load tester. Run scenarios, watch RPS + latency live, compare results. |
+| **Metrics** | SLO attainment, bandit convergence, tier distribution, endpoint health via Prometheus. |
+| **Custom** | Send a one-off request and see the routing decision, response, and audit trail. |
+
+---
+
+## Interactive CLI
+
+With your venv activated, run `arbiter` for a Python-style REPL (`make menu` is the same command):
 
 ```bash
-curl -s http://localhost:8080/v1/chat/completions \
+arbiter
+```
+
+The shell script lives at `scripts/arbiter`; the `arbiter` command is a console entry point in `pyproject.toml` that launches it.
+
+```
+  inference-arbiter  routing control plane
+
+  ● gateway  http://localhost:8080  mode=active
+
+  ── stack ─────────────────────────────────────────
+  start      spin up docker stack + open console
+  stop       shut down all services
+  rebuild    rebuild images + restart
+  status     gateway + per-model readiness
+  logs       tail gateway logs
+
+  ── benchmark ─────────────────────────────────────
+  compare    quick baseline vs arbiter  (2 users · 60s)
+  bench      full run                   (10 users · 3 min)
+
+  ── debug ─────────────────────────────────────────
+  test       send one auto-routed request
+  console    open console in browser
+  exit       quit
+
+  →
+```
+
+Commands accept both names and numbers (type `start` or `1`, `stop` or `2`, etc.). Type `help` to reprint the menu.
+
+---
+
+## Make Targets
+
+```bash
+arbiter           # interactive CLI REPL
+make menu         # same as arbiter
+make start        # start the full Docker stack (non-interactive)
+make dev          # alias for make start
+make stop         # shut everything down
+make rebuild      # rebuild images + restart
+make status       # check gateway + per-tier readiness
+make request      # send one test request (pretty-printed)
+make logs         # tail gateway logs
+make compare      # quick 2-user 60s baseline vs arbiter comparison
+make test         # run unit tests
+make install      # create .venv and install dependencies
+```
+
+Headless benchmarking:
+
+```bash
+make bench SCENARIO=baseline USERS=10 DURATION=3m
+make bench SCENARIO=arbiter  USERS=10 DURATION=3m
+make bench SCENARIO=round_robin
+make bench SCENARIO=random
+```
+
+---
+
+## Sending Requests
+
+The gateway is fully OpenAI-compatible. Just point your existing client at `localhost:8080`:
+
+```bash
+# Auto-routing (bandit decides the tier)
+curl http://localhost:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "auto",
-    "messages": [{"role": "user", "content": "What is 2+2?"}],
-    "x_slo_deadline_ms": 5000,
-    "x_priority": "interactive"
-  }' -D -
+    "messages": [{"role": "user", "content": "Explain quantum entanglement simply."}]
+  }'
+
+# Pin to a specific tier
+curl http://localhost:8080/v1/chat/completions \
+  -d '{"model": "small", "messages": [...]}'
+
+# Set an SLO deadline (ms) and priority
+curl http://localhost:8080/v1/chat/completions \
+  -d '{
+    "model": "auto",
+    "messages": [...],
+    "x_slo_deadline_ms": 3000,
+    "x_priority": "critical"
+  }'
 ```
 
-Response headers include `X-Model-Tier`, `X-Routing-Reason`, `X-Tiers-Attempted`, `X-Elapsed-Ms`.
+**Model values:** `auto`, `small` (1b), `medium` (3b), `large` (8b)
 
-### Audit trail
+**Priority values:** `critical`, `standard` (default), `batch`
+
+**Response headers** on every request:
+
+| Header | Meaning |
+|---|---|
+| `X-Model-Tier` | Which tier actually served the response |
+| `X-Routing-Reason` | Why that tier was chosen |
+| `X-Tiers-Attempted` | All tiers tried in order |
+| `X-Elapsed-Ms` | Total gateway latency |
+
+---
+
+## Audit Trail
+
+Every request is stored with its full routing history. Query it by request ID:
 
 ```bash
 curl "http://localhost:8080/v1/routing/decisions?request_id=<id>"
 ```
 
-Or click any request in the console Live tab.
+Or click any row in the console Live tab. The audit shows every tier attempted, the SLO budget at each step, the feature vector, and the failure attribution.
+
+---
 
 ## Configuration
 
-All tunables in `[config.yaml](config.yaml)`. Environment overrides use `ARBITER_*` prefix (env wins over YAML).
+All settings are in `config.yaml`. Environment variables (`ARBITER_*`) override YAML values.
+
+```yaml
+models:
+  small:  "llama3.2:1b"
+  medium: "llama3.2:3b"
+  large:  "llama3.1:8b"
+
+bandit:
+  linucb_alpha: 0.5                          # exploration vs exploitation
+  cold_start_min_observations_per_tier: 500  # heuristic until this many obs
+  feature_dim: 16
+
+admission:
+  batch_retry_after_s: 30
+  batch_immediate_shed: true
+```
+
+Bandit state is saved automatically to `data/bandit_checkpoint.npz` on shutdown and reloaded on startup — the bandit doesn't lose its learning between restarts.
+
+Override via environment:
+
+```bash
+ARBITER_LINUCB_ALPHA=0.3 \
+ARBITER_LARGE_MODEL=llama3.1:70b \
+docker compose up -d
+```
+
+---
 
 ## Benchmarking
 
-**Recommended:** use the console Benchmark tab at [http://localhost:8080/console](http://localhost:8080/console)
+### From the console (recommended)
 
-**Headless (CI):**
+Go to the **Benchmark tab** at `http://localhost:8080/console`. Choose a scenario, set users and duration, hit Start. Results appear live, and a comparison card shows up automatically after running two scenarios.
+
+**Scenarios:**
+- **Baseline** — all requests to a single fixed tier (choose large/medium/small)
+- **Arbiter** — bandit-routed
+- **Round-robin** — cycles small → medium → large
+- **Random** — uniform random tier per request
+
+### Headless
 
 ```bash
-make bench SCENARIO=baseline USERS=10 DURATION=3m
-make bench SCENARIO=arbiter
-make bench SCENARIO=round_robin
+# Quick comparison (2 users, 60 seconds each)
+make compare
+
+# Full run
+make bench SCENARIO=arbiter USERS=20 DURATION=300
 ```
 
-Legacy aliases: `make load-baseline`, `make load-arbiter`, `make load-round-robin`
+---
 
-## Advanced observability
+## Observability
 
-Prometheus and Grafana still run via Docker for power users:
+The console Metrics tab covers daily use. For deeper analysis:
 
-- Prometheus: [http://localhost:9090](http://localhost:9090)
-- Grafana: [http://localhost:3000](http://localhost:3000) (`admin` / `admin`)
-- Dashboard: `deploy/grafana/dashboards/inference-arbiter.json`
+- **Prometheus:** `http://localhost:9090`
+- **Grafana:** `http://localhost:3000` (admin / admin)
+- **Raw metrics:** `http://localhost:8080/metrics` (Prometheus format)
 
-The console Metrics tab queries Prometheus on your behalf — you don't need to open Grafana for daily use.
+Key metrics exported:
+- `arbiter_requests_total{tier, reason}` — routing decisions
+- `arbiter_latency_seconds{tier, complexity}` — response latency histogram
+- `arbiter_slo_outcome_total{met, priority}` — SLO attainment counters
+- `arbiter_bandit_observations{tier}` — learning progress per tier
+- `arbiter_cost_proxy_total{tier}` — relative cost tracking
 
-## Code details
+---
 
-1. **Wall-clock SLO across a cascade?** Pre-flight TTFT check in `routing/executor.py` using atomic `RequestContext`.
-2. **Decouple quality vs latency failures?** Three-way `FailureAttribution` in telemetry with separate bandit rewards.
-3. **Bandit cold start?** Heuristic prior until `cold_start_min_observations_per_tier` in `routing/bandit.py`.
+## Architecture
+
+See [ARCHITECTURE.md](ARCHITECTURE.md) for a full walkthrough of the four subsystems (Admission → Bandit → Executor → Telemetry), the LinUCB contextual bandit, the SLO-budget-decay cascade, and how every piece fits together.
+
+Short version:
+
+```
+POST /v1/chat/completions
+        │
+   ┌────▼────┐   ┌────────┐   ┌──────────┐   ┌──────────┐
+   │Admission│──▶│ Bandit │──▶│ Executor │──▶│Telemetry │
+   │    A    │   │   B    │   │    C     │   │    D     │
+   └────┬────┘   └────────┘   └────┬─────┘   └──────────┘
+        │                          │
+     503 shed               Ollama 1b / 3b / 8b
+```
+
+---
 
 ## Development
 
 ```bash
-bash scripts/arbiter    # interactive control plane (or: make menu)
-.venv/bin/pytest tests/ -v
+arbiter             # interactive CLI (stack, bench, logs, test request)
+make test           # unit + integration tests
 .venv/bin/ruff check src/
-make run              # gateway only (needs Ollama at :11434)
-make console          # print console URL
+make run            # gateway only (no Docker; needs Ollama at :11434)
+make rebuild        # rebuild Docker image after code changes
 ```
 
+**Project layout (dev tooling):**
+
+```
+scripts/
+├── arbiter    # interactive REPL (launched by the arbiter command)
+└── dev.sh     # stack bootstrap used by make start / make dev
+src/inference_arbiter/
+├── cli.py     # console entry point for arbiter
+└── gateway/   # FastAPI app + /console UI
+```
+
+---
+
+## What Makes This Different
+
+| Feature | inference-arbiter | LiteLLM / Bifrost | RouteLLM / PROTEUS |
+|---|---|---|---|
+| SLO-budget cascade | ✓ wall-clock deadline per tier | — | — |
+| Online bandit learning | ✓ live telemetry | — | offline labels only |
+| Batch admission shedding | ✓ router-layer 503 | — | — |
+| Production infra | ✓ circuit breakers, audit, SSE | ✓ | — |
+| OpenAI compatible | ✓ | ✓ | — |

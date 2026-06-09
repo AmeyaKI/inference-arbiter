@@ -24,7 +24,7 @@ dev:
 	@bash scripts/dev.sh
 
 menu:
-	@bash scripts/arbiter
+	@.venv/bin/arbiter
 
 up:
 	docker compose up -d

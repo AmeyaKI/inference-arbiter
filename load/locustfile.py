@@ -2,7 +2,7 @@
 
 For interactive benchmarking, use the unified console instead:
 
-  bash scripts/arbiter   # or: make dev
+  arbiter            # or: make dev
   open http://localhost:8080/console
 
 Headless CI / advanced usage:
