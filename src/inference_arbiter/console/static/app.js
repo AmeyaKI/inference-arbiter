@@ -3,6 +3,23 @@
 const MAX_ROWS = 120;
 const COLD_START_OBS = 500;
 
+const CHART_THEME = {
+  grid: "#2e2c28",
+  ticks: "#b0aea5",
+  font: "'JetBrains Mono'",
+  accent: "#d97757",
+  accentFill: "rgba(217, 119, 87, 0.12)",
+  colors: {
+    olive: "#788c5d",
+    clay: "#d97757",
+    fig: "#c46686",
+    sky: "#6a9bcc",
+    cactus: "#bcd1ca",
+  },
+  barColors: ["#788c5d", "#d97757", "#c46686", "#6a9bcc"],
+  pieColors: ["#d97757", "#788c5d", "#c46686", "#6a9bcc", "#bcd1ca"],
+};
+
 const liveFeed = document.getElementById("live-feed");
 const feedEmpty = document.getElementById("feed-empty");
 
@@ -13,13 +30,15 @@ let benchStartTime = null;
 let benchDuration = 0;
 let benchUsers = 0;
 let benchSpawnRate = 0;
+let lastAuditData = null;
+let activeAuditTab = "summary";
 const charts = {};
 
 // ── helpers ──────────────────────────────────────────────────
 
 function esc(s) {
   const d = document.createElement("div");
-  d.textContent = s;
+  d.textContent = s ?? "";
   return d.innerHTML;
 }
 
@@ -31,17 +50,23 @@ function fmtMs(ms) {
 
 function latCls(ms) {
   if (!ms) return "";
-  if (ms < 500)  return "fast";
+  if (ms < 500) return "fast";
   if (ms < 2000) return "mid";
   return "slow";
 }
 
 function tierCls(tier) {
   const t = (tier || "").toLowerCase();
-  if (t === "small")  return "tier-small";
+  if (t === "small") return "tier-small";
   if (t === "medium") return "tier-medium";
-  if (t === "large")  return "tier-large";
+  if (t === "large") return "tier-large";
   return "tier-unknown";
+}
+
+function tierPill(tier) {
+  const t = (tier || "unknown").toLowerCase();
+  const cls = t === "small" ? "pill-small" : t === "medium" ? "pill-medium" : t === "large" ? "pill-large" : "pill-unknown";
+  return `<span class="pill ${cls}">${esc(t)}</span>`;
 }
 
 function pctDelta(a, b) {
@@ -49,16 +74,61 @@ function pctDelta(a, b) {
   return Math.round(((b - a) / b) * 100);
 }
 
+function showToast(msg) {
+  const toast = document.getElementById("toast");
+  if (!toast) return;
+  toast.textContent = msg;
+  toast.classList.add("show");
+  setTimeout(() => toast.classList.remove("show"), 2200);
+}
+
+function chartScales(yLabel) {
+  return {
+    x: {
+      ticks: { color: CHART_THEME.ticks, font: { family: CHART_THEME.font, size: 10 } },
+      grid: { display: false },
+    },
+    y: {
+      beginAtZero: true,
+      grid: { color: CHART_THEME.grid },
+      ticks: { color: CHART_THEME.ticks, font: { family: CHART_THEME.font, size: 10 } },
+      title: yLabel
+        ? { display: true, text: yLabel, color: CHART_THEME.ticks, font: { size: 10 } }
+        : undefined,
+    },
+  };
+}
+
+function timeAgo(epochMs) {
+  if (!epochMs) return "—";
+  const sec = Math.max(0, Math.round((Date.now() - epochMs) / 1000));
+  if (sec < 60) return `${sec}s`;
+  return `${Math.floor(sec / 60)}m`;
+}
+
 // ── tabs ─────────────────────────────────────────────────────
 
+function switchTab(tabName) {
+  document.querySelectorAll(".tab").forEach((t) => {
+    const active = t.dataset.tab === tabName;
+    t.classList.toggle("active", active);
+    t.setAttribute("aria-selected", active ? "true" : "false");
+  });
+  document.querySelectorAll(".panel").forEach((p) => p.classList.remove("active"));
+  const panel = document.getElementById(`panel-${tabName}`);
+  if (panel) panel.classList.add("active");
+  if (tabName === "metrics") startMetricsPoll();
+  else stopMetricsPoll();
+}
+
 document.querySelectorAll(".tab").forEach((tab) => {
-  tab.addEventListener("click", () => {
-    document.querySelectorAll(".tab").forEach((t) => t.classList.remove("active"));
-    document.querySelectorAll(".panel").forEach((p) => p.classList.remove("active"));
-    tab.classList.add("active");
-    document.getElementById(`panel-${tab.dataset.tab}`).classList.add("active");
-    if (tab.dataset.tab === "metrics") startMetricsPoll();
-    else stopMetricsPoll();
+  tab.addEventListener("click", () => switchTab(tab.dataset.tab));
+});
+
+document.querySelectorAll(".goto-tab").forEach((btn) => {
+  btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    switchTab(btn.dataset.goto);
   });
 });
 
@@ -74,35 +144,49 @@ const durEl = document.getElementById("bench-duration");
 const durLbl = document.getElementById("val-duration");
 if (durEl) durEl.addEventListener("input", () => { durLbl.textContent = `${durEl.value}s`; });
 
-// ── scenario hints ────────────────────────────────────────────
+// ── scenario cards ───────────────────────────────────────────
 
 const HINTS = {
-  baseline:    "All requests go to one fixed model tier. Useful as a cost and latency ceiling. Choose the tier below.",
-  arbiter:     "LinUCB bandit selects tier based on prompt complexity + SLO budget. The system under test.",
+  baseline: "All requests go to one fixed model tier. Useful as a cost and latency ceiling.",
+  arbiter: "LinUCB bandit selects tier based on prompt complexity + SLO budget. The system under test.",
   round_robin: "Cycles evenly across small / medium / large. Simulates naive load distribution.",
-  random:      "Each request goes to a uniformly random tier. Good baseline for comparing against intelligent routing.",
+  random: "Each request goes to a uniformly random tier. Good baseline for comparing against intelligent routing.",
 };
 
 const scenarioSel = document.getElementById("bench-scenario");
 const scenarioHint = document.getElementById("scenario-hint");
 const baselineModelRow = document.getElementById("baseline-model-row");
 
+function selectScenario(value) {
+  if (scenarioSel) scenarioSel.value = value;
+  document.querySelectorAll(".scenario-card").forEach((card) => {
+    card.classList.toggle("selected", card.dataset.scenario === value);
+  });
+  refreshHint();
+}
+
 function refreshHint() {
-  if (scenarioHint) scenarioHint.textContent = HINTS[scenarioSel.value] || "";
+  const val = scenarioSel?.value || "arbiter";
+  if (scenarioHint) scenarioHint.textContent = HINTS[val] || "";
   if (baselineModelRow) {
-    baselineModelRow.style.display = scenarioSel.value === "baseline" ? "" : "none";
+    baselineModelRow.style.display = val === "baseline" ? "" : "none";
   }
 }
-scenarioSel.addEventListener("change", refreshHint);
+
+document.querySelectorAll(".scenario-card").forEach((card) => {
+  card.addEventListener("click", () => selectScenario(card.dataset.scenario));
+});
+
+if (scenarioSel) scenarioSel.addEventListener("change", refreshHint);
 refreshHint();
 
 // ── health poll ───────────────────────────────────────────────
 
 async function pollHealth() {
-  const dotGW  = document.getElementById("dot-gateway");
-  const lblGW  = document.getElementById("lbl-gateway");
-  const dotBD  = document.getElementById("dot-bandit");
-  const lblBD  = document.getElementById("lbl-bandit");
+  const dotGW = document.getElementById("dot-gateway");
+  const lblGW = document.getElementById("lbl-gateway");
+  const dotBD = document.getElementById("dot-bandit");
+  const lblBD = document.getElementById("lbl-bandit");
 
   try {
     const data = await fetch("/console/api/health").then((r) => r.json());
@@ -164,66 +248,190 @@ function addFeedRow(event) {
       ? event.tiers_attempted.join(" → ")
       : tier;
   const reason = event.routing_reason ? ` · ${event.routing_reason}` : "";
+  const ts = event.timestamp ? Math.round(event.timestamp * 1000) : Date.now();
 
   const row = document.createElement("div");
   row.className = "feed-row entering";
   row.innerHTML = `
-    <div class="tier-cell ${tierCls(tier)}">
-      <span class="tier-pip"></span>
-      <span class="tier-label-text">${esc(tier)}</span>
-    </div>
+    <div class="tier-cell">${tierPill(tier)}</div>
     <div class="feed-prompt">${esc(event.prompt_preview || "—")}</div>
     <div class="feed-route">${esc(cascade + reason)}</div>
     <div class="feed-latency ${latCls(event.elapsed_ms)}">${fmtMs(event.elapsed_ms)}</div>
+    <div class="feed-row-audit">audit →</div>
   `;
   row.addEventListener("click", () => showAudit(event.request_id));
 
   liveFeed.insertBefore(row, feedEmpty ? feedEmpty.nextSibling : liveFeed.firstChild);
 
-  // Trim excess rows (keep feedEmpty in place)
   const rows = liveFeed.querySelectorAll(".feed-row");
   if (rows.length > MAX_ROWS) rows[rows.length - 1].remove();
 }
 
 // ── audit modal ───────────────────────────────────────────────
 
+function setAuditTab(tab) {
+  activeAuditTab = tab;
+  document.querySelectorAll(".audit-tab").forEach((t) => {
+    const active = t.dataset.auditTab === tab;
+    t.classList.toggle("active", active);
+    t.setAttribute("aria-selected", active ? "true" : "false");
+  });
+  document.getElementById("audit-panel-summary").classList.toggle("active", tab === "summary");
+  document.getElementById("audit-panel-raw").classList.toggle("active", tab === "raw");
+}
+
+document.querySelectorAll(".audit-tab").forEach((tab) => {
+  tab.addEventListener("click", () => setAuditTab(tab.dataset.auditTab));
+});
+
+function priorityBadge(priority) {
+  const p = (priority || "standard").toLowerCase();
+  return `<span class="priority-badge priority-${p}">${esc(p)}</span>`;
+}
+
+function renderAuditSummary(data) {
+  const el = document.getElementById("audit-summary");
+  if (!el) return;
+
+  const history = data.routing_history || [];
+  const metrics = data.metrics || {};
+  const payload = data.payload || {};
+  const totalBudget = metrics.total_slo_budget_ms;
+  const elapsed = metrics.current_elapsed_ms || 0;
+  const remaining = metrics.remaining_ms;
+
+  let sloHtml = "";
+  if (totalBudget != null) {
+    const pct = Math.min(100, Math.round((elapsed / totalBudget) * 100));
+    sloHtml = `
+      <div class="audit-section-title">SLO budget</div>
+      <div class="slo-bar-wrap">
+        <div class="slo-bar-meta">
+          <span>elapsed: <strong>${fmtMs(elapsed)}</strong></span>
+          <span>budget: <strong>${fmtMs(totalBudget)}</strong></span>
+          <span>remaining: <strong>${remaining != null ? fmtMs(remaining) : "—"}</strong></span>
+        </div>
+        <div class="slo-bar-track">
+          <div class="slo-bar-fill" style="width:${pct}%"></div>
+        </div>
+      </div>`;
+  } else {
+    sloHtml = `<div class="sub-text">No SLO deadline set for this request.</div>`;
+  }
+
+  const steps = history.map((step, i) => {
+    const isLast = i === history.length - 1;
+    const passed = step.verification_status === "PASSED";
+    const stepCls = isLast && data.status === "completed" ? "final" : passed ? "pass" : "fail";
+    const icon = isLast && data.status === "completed" ? "✓" : passed ? "✓" : "×";
+    return `
+      <div class="cascade-step ${stepCls}">
+        <div class="cascade-line"><div class="cascade-dot">${icon}</div></div>
+        <div class="cascade-body">
+          <div class="cascade-tier">${tierPill(step.tier)} <span style="color:var(--text-4);font-weight:400">${esc(step.backend_model || "")}</span></div>
+          <div class="cascade-meta">
+            <span>verify: ${esc(step.verification_status)}</span>
+            <span>latency: ${fmtMs(step.latency_ms)}</span>
+            ${step.ttft_ms != null ? `<span>ttft: ${fmtMs(step.ttft_ms)}</span>` : ""}
+            <span>failure: ${esc(step.failure_attribution || "none")}</span>
+            ${step.budget_remaining_ms != null ? `<span>budget left: ${fmtMs(step.budget_remaining_ms)}</span>` : ""}
+          </div>
+        </div>
+      </div>`;
+  }).join("");
+
+  let banditHtml = "";
+  if (data.bandit_scores && Object.keys(data.bandit_scores).length > 0) {
+    const maxScore = Math.max(...Object.values(data.bandit_scores), 0.001);
+    const rows = Object.entries(data.bandit_scores)
+      .sort((a, b) => b[1] - a[1])
+      .map(([tier, score]) => {
+        const pct = Math.round((score / maxScore) * 100);
+        return `
+          <div class="bandit-score-row">
+            <span class="bandit-score-tier">${esc(tier)}</span>
+            <div class="bandit-score-track">
+              <div class="bandit-score-fill" style="width:${pct}%"></div>
+            </div>
+            <span class="bandit-score-val">${score.toFixed(3)}</span>
+          </div>`;
+      }).join("");
+    banditHtml = `
+      <div class="audit-section-title">Bandit scores</div>
+      <div class="bandit-scores">${rows}</div>`;
+  }
+
+  el.innerHTML = `
+    <div class="audit-header-row">
+      <span class="audit-request-id">${esc(data.request_id)}</span>
+      ${priorityBadge(data.priority)}
+      ${data.final_tier ? tierPill(data.final_tier) : ""}
+      ${data.routing_reason ? `<span class="chip">reason: <strong>${esc(data.routing_reason)}</strong></span>` : ""}
+    </div>
+    ${sloHtml}
+    <div class="audit-section-title" style="margin-top:8px">Cascade timeline</div>
+    <div class="cascade-timeline">${steps || '<span class="sub-text">No tier attempts recorded.</span>'}</div>
+    ${banditHtml}
+    <div class="audit-section-title" style="margin-top:8px">Prompt metadata</div>
+    <div class="audit-meta-grid">
+      <span>tokens: <strong>${payload.estimated_tokens ?? "—"}</strong></span>
+      <span>hash: <strong>${esc(payload.prompt_hash || "—")}</strong></span>
+      <span>model requested: <strong>${esc(data.requested_model || "auto")}</strong></span>
+      <span>status: <strong>${esc(data.status || "—")}</strong></span>
+    </div>
+  `;
+}
+
 async function showAudit(requestId) {
-  const modal   = document.getElementById("audit-modal");
-  const pre     = document.getElementById("audit-json");
+  const modal = document.getElementById("audit-modal");
+  const pre = document.getElementById("audit-json");
   const spinner = document.getElementById("audit-spinner");
 
   pre.textContent = "";
+  document.getElementById("audit-summary").innerHTML = "";
+  lastAuditData = null;
   spinner.classList.remove("hidden");
   modal.classList.remove("hidden");
+  setAuditTab("summary");
 
   try {
     const data = await fetch(`/console/api/routing/${requestId}`).then((r) => r.json());
+    lastAuditData = data;
     pre.textContent = JSON.stringify(data, null, 2);
+    renderAuditSummary(data);
   } catch (e) {
     pre.textContent = String(e);
+    document.getElementById("audit-summary").innerHTML = `<span class="sub-text" style="color:var(--fig)">${esc(String(e))}</span>`;
   } finally {
     spinner.classList.add("hidden");
   }
 }
 
-document.getElementById("modal-close").addEventListener("click", () => {
+function closeModal() {
   document.getElementById("audit-modal").classList.add("hidden");
-});
+}
+
+document.getElementById("modal-close").addEventListener("click", closeModal);
 
 document.getElementById("audit-modal").addEventListener("click", (e) => {
-  if (e.target === document.getElementById("audit-modal")) {
-    document.getElementById("audit-modal").classList.add("hidden");
+  if (e.target === document.getElementById("audit-modal")) closeModal();
+});
+
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !document.getElementById("audit-modal").classList.contains("hidden")) {
+    closeModal();
   }
 });
 
 document.getElementById("audit-copy").addEventListener("click", () => {
-  const text = document.getElementById("audit-json").textContent;
+  let text = "";
+  if (activeAuditTab === "raw") {
+    text = document.getElementById("audit-json").textContent;
+  } else if (lastAuditData) {
+    text = JSON.stringify(lastAuditData, null, 2);
+  }
   if (!text) return;
-  navigator.clipboard.writeText(text).catch(() => {});
-  const btn = document.getElementById("audit-copy");
-  const orig = btn.innerHTML;
-  btn.textContent = "Copied!";
-  setTimeout(() => { btn.innerHTML = orig; lucide.createIcons({ nodes: [btn] }); }, 1500);
+  navigator.clipboard.writeText(text).then(() => showToast("Copied to clipboard")).catch(() => {});
 });
 
 // ── benchmark ─────────────────────────────────────────────────
@@ -232,25 +440,25 @@ document.getElementById("bench-start").addEventListener("click", startBench);
 document.getElementById("bench-stop").addEventListener("click", stopBench);
 
 async function startBench() {
-  const scenario     = document.getElementById("bench-scenario").value;
-  const users        = parseInt(document.getElementById("bench-users").value, 10);
-  const spawnRate    = parseFloat(document.getElementById("bench-ramp").value);
-  const durationS    = parseFloat(document.getElementById("bench-duration").value);
+  const scenario = document.getElementById("bench-scenario").value;
+  const users = parseInt(document.getElementById("bench-users").value, 10);
+  const spawnRate = parseFloat(document.getElementById("bench-ramp").value);
+  const durationS = parseFloat(document.getElementById("bench-duration").value);
   const baselineModel = document.getElementById("baseline-model")?.value || "large";
 
-  benchStartTime  = Date.now();
-  benchDuration   = durationS;
-  benchUsers      = users;
-  benchSpawnRate  = spawnRate;
+  benchStartTime = Date.now();
+  benchDuration = durationS;
+  benchUsers = users;
+  benchSpawnRate = spawnRate;
 
   document.getElementById("bench-start").disabled = true;
-  document.getElementById("bench-stop").disabled  = false;
+  document.getElementById("bench-stop").disabled = false;
+  document.getElementById("bench-btn-row").classList.add("btn-running");
   document.getElementById("stat-elapsed").textContent = "0:00";
 
   const rampWrap = document.getElementById("ramp-wrap");
   rampWrap.classList.remove("hidden");
-  document.getElementById("ramp-label").textContent =
-    `Spawning ${users} workers at ${spawnRate}/s…`;
+  document.getElementById("ramp-label").textContent = `Spawning ${users} workers at ${spawnRate}/s…`;
 
   initBenchChart();
 
@@ -274,11 +482,19 @@ async function stopBench() {
   clearInterval(benchPollTimer);
   benchPollTimer = null;
   benchStartTime = null;
-  document.getElementById("bench-start").disabled  = false;
-  document.getElementById("bench-stop").disabled   = true;
+  document.getElementById("bench-start").disabled = false;
+  document.getElementById("bench-stop").disabled = true;
+  document.getElementById("bench-btn-row").classList.remove("btn-running");
   document.getElementById("ramp-wrap").classList.add("hidden");
   document.getElementById("stat-elapsed").textContent = "—";
   pollBench();
+}
+
+function setStatLatency(id, ms) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.textContent = fmtMs(ms);
+  el.className = `stat-value ${latCls(ms)}`;
 }
 
 async function pollBench() {
@@ -289,10 +505,9 @@ async function pollBench() {
     document.getElementById("stat-rps").textContent =
       typeof data.rps === "number" ? data.rps.toFixed(1) : "—";
     document.getElementById("stat-failures").textContent = data.failures ?? "—";
-    document.getElementById("stat-p50").textContent = fmtMs(data.p50_ms);
-    document.getElementById("stat-p95").textContent = fmtMs(data.p95_ms);
+    setStatLatency("stat-p50", data.p50_ms);
+    setStatLatency("stat-p95", data.p95_ms);
 
-    // Elapsed timer + ramp-up progress
     if (benchStartTime && data.running) {
       const elapsed = (Date.now() - benchStartTime) / 1000;
       const mins = Math.floor(elapsed / 60);
@@ -313,13 +528,10 @@ async function pollBench() {
       }
     }
 
-    // Chart
     if (benchChart && data.running) {
       const elapsed = benchStartTime ? Math.round((Date.now() - benchStartTime) / 1000) : 0;
       benchChart.data.labels.push(`${elapsed}s`);
-      benchChart.data.datasets[0].data.push(
-        typeof data.rps === "number" ? data.rps : 0
-      );
+      benchChart.data.datasets[0].data.push(typeof data.rps === "number" ? data.rps : 0);
       if (benchChart.data.labels.length > 90) {
         benchChart.data.labels.shift();
         benchChart.data.datasets[0].data.shift();
@@ -328,8 +540,9 @@ async function pollBench() {
     }
 
     if (!data.running && benchPollTimer) {
-      document.getElementById("bench-start").disabled  = false;
-      document.getElementById("bench-stop").disabled   = true;
+      document.getElementById("bench-start").disabled = false;
+      document.getElementById("bench-stop").disabled = true;
+      document.getElementById("bench-btn-row").classList.remove("btn-running");
       document.getElementById("ramp-wrap").classList.add("hidden");
       clearInterval(benchPollTimer);
       benchPollTimer = null;
@@ -349,12 +562,12 @@ function initBenchChart() {
       labels: [],
       datasets: [{
         data: [],
-        borderColor: "#0070f3",
-        backgroundColor: "rgba(0,112,243,0.08)",
+        borderColor: CHART_THEME.accent,
+        backgroundColor: CHART_THEME.accentFill,
         fill: true,
         tension: 0.35,
         pointRadius: 0,
-        borderWidth: 1.5,
+        borderWidth: 2,
       }],
     },
     options: {
@@ -364,12 +577,7 @@ function initBenchChart() {
       plugins: { legend: { display: false } },
       scales: {
         x: { display: false },
-        y: {
-          beginAtZero: true,
-          grid: { color: "#242424" },
-          ticks: { color: "#737373", font: { family: "'JetBrains Mono'" } },
-          title: { display: true, text: "req/s", color: "#737373", font: { size: 11 } },
-        },
+        y: chartScales("req/s").y,
       },
     },
   });
@@ -377,10 +585,16 @@ function initBenchChart() {
 
 // ── comparison card ──────────────────────────────────────────
 
+function compareBar(pct, good) {
+  const color = good ? CHART_THEME.colors.olive : CHART_THEME.colors.fig;
+  const w = Math.min(Math.abs(pct || 0), 100);
+  return `<div class="compare-bar-wrap"><div class="compare-bar" style="width:${w}%;background:${color}"></div></div>`;
+}
+
 function renderComparison(runs) {
   const baseline = runs.baseline;
-  const arbiter  = runs.arbiter;
-  const card  = document.getElementById("compare-card");
+  const arbiter = runs.arbiter;
+  const card = document.getElementById("compare-card");
   const table = document.getElementById("compare-table");
   const badge = document.getElementById("bench-badge");
 
@@ -392,8 +606,8 @@ function renderComparison(runs) {
   function deltaTag(d, goodWhenPositive = false) {
     if (d == null) return "";
     const good = goodWhenPositive ? d > 0 : d > 0;
-    const cls  = good ? "delta-good" : "delta-bad";
-    const sign = d > 0 ? "−" : "+";
+    const cls = good ? "delta-good" : d === 0 ? "delta-flat" : "delta-bad";
+    const sign = d > 0 ? "−" : d < 0 ? "+" : "";
     return `<span class="delta ${cls}">${sign}${Math.abs(d)}%</span>`;
   }
 
@@ -419,13 +633,22 @@ function renderComparison(runs) {
       </div>
       <div class="compare-col">
         <div class="compare-col-head">Arbiter</div>
-        <div class="compare-row"><div class="compare-row-val">${fmtMs(arbiter.p50_ms)} ${deltaTag(p50d)}</div></div>
-        <div class="compare-row"><div class="compare-row-val">${fmtMs(arbiter.p95_ms)} ${deltaTag(p95d)}</div></div>
-        <div class="compare-row"><div class="compare-row-val">${arbiter.rps} rps ${rpsd != null ? deltaTag(-rpsd, true) : ""}</div></div>
+        <div class="compare-row">
+          <div class="compare-row-val">${fmtMs(arbiter.p50_ms)} ${deltaTag(p50d)}</div>
+          ${compareBar(p50d, p50d > 0)}
+        </div>
+        <div class="compare-row">
+          <div class="compare-row-val">${fmtMs(arbiter.p95_ms)} ${deltaTag(p95d)}</div>
+          ${compareBar(p95d, p95d > 0)}
+        </div>
+        <div class="compare-row">
+          <div class="compare-row-val">${arbiter.rps} rps ${rpsd != null ? deltaTag(-rpsd, true) : ""}</div>
+          ${rpsd != null ? compareBar(-rpsd, rpsd > 0) : ""}
+        </div>
       </div>
     `;
   } else {
-    const run  = baseline || arbiter;
+    const run = baseline || arbiter;
     const name = baseline ? "Baseline" : "Arbiter";
     const next = baseline ? "Run Arbiter to compare" : "Run Baseline to compare";
     table.innerHTML = `
@@ -434,7 +657,7 @@ function renderComparison(runs) {
         <div class="compare-row">
           <div class="compare-row-val">P50 ${fmtMs(run.p50_ms)} · P95 ${fmtMs(run.p95_ms)} · ${run.rps} rps</div>
         </div>
-        <div class="sub-text" style="margin-top:6px">${next}</div>
+        <div class="sub-text" style="margin-top:8px">${next}</div>
       </div>
     `;
   }
@@ -452,6 +675,16 @@ function stopMetricsPoll() {
   metricsPollTimer = null;
 }
 
+function updateKpiRing(elId, valId, pct, color) {
+  const bg = document.getElementById(elId);
+  const val = document.getElementById(valId);
+  if (bg) {
+    bg.style.setProperty("--ring-pct", `${Math.min(100, pct)}%`);
+    bg.style.setProperty("--ring-color", color);
+  }
+  if (val) val.textContent = pct != null ? `${Math.round(pct)}%` : "—";
+}
+
 async function pollMetrics() {
   const banner = document.getElementById("metrics-banner");
   try {
@@ -464,67 +697,78 @@ async function pollMetrics() {
     }
     banner.classList.add("hidden");
 
-    renderBar("chart-tier-rate", data.tier_rate,      "req/s");
-    renderPie("chart-reasons",   data.routing_reasons);
-    renderBar("chart-cost",      data.cost_rate,       "cost/s");
+    renderBar("chart-tier-rate", data.tier_rate, "req/s");
+    renderPie("chart-reasons", data.routing_reasons);
+    renderBar("chart-cost", data.cost_rate, "cost/s");
 
-    // SLO
-    const sloEl = document.getElementById("metric-slo");
-    if (data.slo_attainment_rate != null) {
-      const v = (data.slo_attainment_rate * 100).toFixed(1);
-      sloEl.textContent = `${v}%`;
-      sloEl.style.color = data.slo_attainment_rate >= 0.95 ? "var(--success)"
-        : data.slo_attainment_rate >= 0.8 ? "var(--warning)" : "var(--danger)";
+    const sloRate = data.slo_attainment_rate;
+    if (sloRate != null) {
+      const v = (sloRate * 100).toFixed(1);
+      const pct = sloRate * 100;
+      const color = sloRate >= 0.95 ? CHART_THEME.colors.olive : sloRate >= 0.8 ? CHART_THEME.colors.clay : CHART_THEME.colors.fig;
+      updateKpiRing("kpi-slo-ring-bg", "kpi-slo-ring-val", pct, color);
+      document.getElementById("metric-slo-detail").textContent =
+        `${data.slo_met || 0} met / ${data.slo_evaluated || 0} evaluated (${v}%)`;
     } else {
-      sloEl.textContent = "—";
-      sloEl.style.color = "";
+      updateKpiRing("kpi-slo-ring-bg", "kpi-slo-ring-val", 0, CHART_THEME.colors.clay);
+      document.getElementById("metric-slo-detail").textContent = "No SLO data yet";
     }
-    document.getElementById("metric-slo-detail").textContent =
-      `${data.slo_met || 0} met / ${data.slo_evaluated || 0} evaluated`;
 
-    // Bandit
     const active = data.bandit_policy_active;
+    const obs = data.bandit_observations || {};
+    const obsVals = Object.values(obs);
+    const avgObs = obsVals.length ? obsVals.reduce((a, b) => a + b, 0) / obsVals.length : 0;
+    const convPct = Math.min(100, (avgObs / COLD_START_OBS) * 100);
+    const banditColor = active ? CHART_THEME.colors.olive : CHART_THEME.colors.clay;
+
+    updateKpiRing("kpi-bandit-ring-bg", "kpi-bandit-ring-val", convPct, banditColor);
+    document.getElementById("metric-bandit-kpi").textContent =
+      active ? "LinUCB learned policy active" : `Heuristic cold start (${Math.round(avgObs)}/${COLD_START_OBS} avg obs)`;
+
     const bdEl = document.getElementById("metric-bandit");
     bdEl.textContent = active ? "Active" : "Heuristic";
-    bdEl.style.color = active ? "var(--success)" : "var(--warning)";
+    bdEl.style.color = active ? "var(--olive)" : "var(--clay)";
 
-    const obs = data.bandit_observations || {};
+    const tierRate = data.tier_rate || {};
+    const totalRps = Object.values(tierRate).reduce((a, b) => a + b, 0);
+    document.getElementById("kpi-total-rps").textContent = totalRps > 0 ? totalRps.toFixed(2) : "—";
+
     const obsEl = document.getElementById("metric-bandit-obs");
     if (Object.keys(obs).length === 0) {
       obsEl.innerHTML = '<span class="sub-text">No observations yet</span>';
     } else {
       obsEl.innerHTML = Object.entries(obs).map(([tier, count]) => {
-        const n   = Math.round(count);
+        const n = Math.round(count);
         const pct = Math.min((n / COLD_START_OBS) * 100, 100);
         const done = n >= COLD_START_OBS;
+        const tCls = tierCls(tier);
         return `
           <div class="bandit-row">
             <span class="bandit-tier-name">${tier}</span>
             <div class="bandit-track">
-              <div class="bandit-fill ${done ? "done" : ""}" style="width:${pct}%"></div>
+              <div class="bandit-fill ${tCls} ${done ? "done" : ""}" style="width:${pct}%"></div>
             </div>
-            <span class="bandit-count">${n}/${COLD_START_OBS}</span>
+            <span class="bandit-count">${n}/${COLD_START_OBS}${done ? " ✓" : ""}</span>
           </div>`;
       }).join("");
     }
 
-    // Endpoint health
-    const epEl    = document.getElementById("metric-endpoints");
+    const epEl = document.getElementById("metric-endpoints");
     const inFlight = data.endpoint_in_flight || {};
     const circuits = data.circuit_breaker_state || {};
     if (Object.keys(inFlight).length === 0) {
       epEl.innerHTML = '<span class="sub-text">No endpoint data</span>';
     } else {
       epEl.innerHTML = Object.keys(inFlight).map((name) => {
-        const cb  = circuits[name];
+        const cb = circuits[name];
         const cbLabel = cb === 0 ? "closed" : cb === 1 ? "half-open" : "open";
-        const cbColor = cb === 0 ? "var(--success)" : cb === 1 ? "var(--warning)" : "var(--danger)";
+        const cbCls = cb === 0 ? "closed" : cb === 1 ? "half-open" : "open";
         return `
           <div class="ep-row">
             <span class="ep-name">${name}</span>
             <span class="ep-meta">
               <span>${Math.round(inFlight[name])} in-flight</span>
-              <span style="color:${cbColor}">${cbLabel}</span>
+              <span class="ep-chip ${cbCls}">${cbLabel}</span>
             </span>
           </div>`;
       }).join("");
@@ -547,22 +791,15 @@ function renderBar(id, series, yLabel) {
       labels,
       datasets: [{
         data: values,
-        backgroundColor: ["#22c55e", "#f59e0b", "#ef4444", "#0070f3"],
-        borderRadius: 3,
+        backgroundColor: CHART_THEME.barColors,
+        borderRadius: 6,
       }],
     },
     options: {
       responsive: true,
+      maintainAspectRatio: true,
       plugins: { legend: { display: false } },
-      scales: {
-        y: {
-          beginAtZero: true,
-          grid: { color: "#242424" },
-          ticks: { color: "#737373", font: { family: "'JetBrains Mono'", size: 10 } },
-          title: { display: true, text: yLabel, color: "#737373", font: { size: 10 } },
-        },
-        x: { ticks: { color: "#737373", font: { family: "'JetBrains Mono'", size: 10 } }, grid: { display: false } },
-      },
+      scales: chartScales(yLabel),
     },
   });
 }
@@ -577,17 +814,23 @@ function renderPie(id, series) {
       labels: Object.keys(series),
       datasets: [{
         data: Object.values(series),
-        backgroundColor: ["#0070f3", "#22c55e", "#f59e0b", "#ef4444", "#a855f7"],
+        backgroundColor: CHART_THEME.pieColors,
         borderWidth: 0,
       }],
     },
     options: {
       responsive: true,
+      maintainAspectRatio: true,
       cutout: "62%",
       plugins: {
         legend: {
           position: "right",
-          labels: { color: "#737373", font: { size: 11, family: "'JetBrains Mono'" }, boxWidth: 10 },
+          labels: {
+            color: CHART_THEME.ticks,
+            font: { size: 11, family: CHART_THEME.font },
+            boxWidth: 10,
+            padding: 8,
+          },
         },
       },
     },
@@ -597,29 +840,41 @@ function renderPie(id, series) {
 // ── custom request tab ───────────────────────────────────────
 
 let lastCustomRequestId = null;
+let lastCustomResponse = "";
 
 document.getElementById("custom-send").addEventListener("click", sendCustomRequest);
 document.getElementById("custom-input").addEventListener("keydown", (e) => {
   if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) sendCustomRequest();
 });
 
+document.getElementById("custom-copy-btn").addEventListener("click", () => {
+  if (!lastCustomResponse) return;
+  navigator.clipboard.writeText(lastCustomResponse).then(() => showToast("Response copied")).catch(() => {});
+});
+
 async function sendCustomRequest() {
   const content = document.getElementById("custom-input").value.trim();
   if (!content) return;
 
-  const model   = document.getElementById("custom-model").value;
+  const model = document.getElementById("custom-model").value;
   const sendBtn = document.getElementById("custom-send");
-  const result  = document.getElementById("custom-result");
-  const box     = document.getElementById("custom-response");
+  const result = document.getElementById("custom-result");
+  const placeholder = document.getElementById("custom-placeholder");
+  const box = document.getElementById("custom-response");
   const routing = document.getElementById("custom-routing");
   const auditBtn = document.getElementById("custom-audit-btn");
+  const copyBtn = document.getElementById("custom-copy-btn");
 
   sendBtn.disabled = true;
-  sendBtn.innerHTML = '<span class="spinner" style="width:12px;height:12px;margin:0;border-width:2px"></span> Sending…';
+  sendBtn.innerHTML = '<span class="spinner" style="width:14px;height:14px;margin:0;border-width:2px"></span> Sending…';
   result.classList.remove("hidden");
-  box.textContent = "…";
+  if (placeholder) placeholder.classList.add("hidden");
+  box.textContent = "";
+  box.classList.add("loading");
   routing.classList.add("hidden");
   auditBtn.style.display = "none";
+  copyBtn.style.display = "none";
+  lastCustomResponse = "";
 
   const t0 = performance.now();
   try {
@@ -633,10 +888,12 @@ async function sendCustomRequest() {
     });
 
     const elapsed = Math.round(performance.now() - t0);
-    const tier    = resp.headers.get("x-model-tier") || "—";
-    const reason  = resp.headers.get("x-routing-reason") || "—";
+    const tier = resp.headers.get("x-model-tier") || "—";
+    const reason = resp.headers.get("x-routing-reason") || "—";
     const attempted = resp.headers.get("x-tiers-attempted") || "—";
     lastCustomRequestId = resp.headers.get("x-request-id") || null;
+
+    box.classList.remove("loading");
 
     if (!resp.ok) {
       box.textContent = `HTTP ${resp.status}: ${await resp.text()}`;
@@ -644,28 +901,21 @@ async function sendCustomRequest() {
       const data = await resp.json();
       const text = data?.choices?.[0]?.message?.content || "(empty response)";
       box.textContent = text;
+      lastCustomResponse = text;
 
-      const tierCls_ = tierCls(tier);
       routing.innerHTML = `
-        <div class="tier-cell ${tierCls_}">
-          <span class="tier-pip"></span>
-          <span class="tier-label-text">${esc(tier)}</span>
-        </div>
-        <span class="custom-routing-sep">·</span>
-        <span>reason: <strong>${esc(reason)}</strong></span>
-        <span class="custom-routing-sep">·</span>
-        <span>tiers tried: ${esc(attempted)}</span>
-        <span class="custom-routing-sep">·</span>
-        <span class="${latCls(elapsed)}">${fmtMs(elapsed)}</span>
+        ${tierPill(tier)}
+        <span class="chip">reason: <strong>${esc(reason)}</strong></span>
+        <span class="chip">tiers: <strong>${esc(attempted)}</strong></span>
+        <span class="chip ${latCls(elapsed)}">${fmtMs(elapsed)}</span>
       `;
       routing.classList.remove("hidden");
-      lucide.createIcons({ nodes: [routing] });
 
-      if (lastCustomRequestId) {
-        auditBtn.style.display = "";
-      }
+      copyBtn.style.display = "";
+      if (lastCustomRequestId) auditBtn.style.display = "";
     }
   } catch (e) {
+    box.classList.remove("loading");
     box.textContent = String(e);
   } finally {
     sendBtn.disabled = false;

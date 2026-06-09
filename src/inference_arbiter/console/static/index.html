@@ -6,7 +6,7 @@
   <title>inference-arbiter</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,400;0,14..32,500;0,14..32,600;0,14..32,700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,400;0,14..32,500;0,14..32,600;0,14..32,700&family=JetBrains+Mono:wght@400;500&family=Lora:ital,wght@0,400;0,500;0,600;1,400&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/console/static/styles.css" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
   <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
@@ -21,11 +21,11 @@
     <span class="brand-sub">routing console</span>
   </div>
   <div class="status-row">
-    <div class="status-item">
+    <div class="status-pill" title="Gateway health from /console/api/health">
       <div class="status-dot" id="dot-gateway"></div>
       <span id="lbl-gateway">connecting…</span>
     </div>
-    <div class="status-item">
+    <div class="status-pill" title="Heuristic = cold start (&lt;500 obs/tier). Learned = LinUCB active.">
       <div class="status-dot" id="dot-bandit"></div>
       <span id="lbl-bandit">bandit …</span>
     </div>
@@ -33,22 +33,22 @@
 </header>
 
 <!-- Tabs -->
-<nav class="tabs">
-  <button class="tab active" data-tab="live">
-    <i data-lucide="radio" width="13" height="13"></i>
+<nav class="tabs" role="tablist" aria-label="Console sections">
+  <button class="tab active" data-tab="live" role="tab" aria-selected="true" aria-controls="panel-live">
+    <i data-lucide="radio" width="14" height="14"></i>
     Live
   </button>
-  <button class="tab" data-tab="benchmark">
-    <i data-lucide="bar-chart-2" width="13" height="13"></i>
+  <button class="tab" data-tab="benchmark" role="tab" aria-selected="false" aria-controls="panel-benchmark">
+    <i data-lucide="bar-chart-2" width="14" height="14"></i>
     Benchmark
     <span class="tab-badge hidden" id="bench-badge">✓</span>
   </button>
-  <button class="tab" data-tab="metrics">
-    <i data-lucide="layout-dashboard" width="13" height="13"></i>
+  <button class="tab" data-tab="metrics" role="tab" aria-selected="false" aria-controls="panel-metrics">
+    <i data-lucide="layout-dashboard" width="14" height="14"></i>
     Metrics
   </button>
-  <button class="tab" data-tab="custom">
-    <i data-lucide="send" width="13" height="13"></i>
+  <button class="tab" data-tab="custom" role="tab" aria-selected="false" aria-controls="panel-custom">
+    <i data-lucide="send" width="14" height="14"></i>
     Custom
   </button>
 </nav>
@@ -56,7 +56,7 @@
 <main>
 
   <!-- ── Live tab ── -->
-  <section id="panel-live" class="panel active">
+  <section id="panel-live" class="panel active" role="tabpanel" aria-labelledby="tab-live">
     <div class="section-header">
       <span class="section-title">Live routing</span>
       <div class="section-meta">
@@ -72,38 +72,75 @@
       <span>Tier</span>
       <span>Prompt</span>
       <span>Route · Reason</span>
-      <span style="text-align:right">Latency</span>
+      <span>Latency</span>
+      <span></span>
     </div>
 
     <div id="live-feed" class="live-feed">
       <div id="feed-empty" class="feed-empty">
-        <i data-lucide="radio" width="32" height="32"></i>
-        <span>Waiting for requests</span>
+        <i data-lucide="radio" width="36" height="36"></i>
+        <span class="feed-empty-title">Waiting for requests</span>
         <code>curl localhost:8080/v1/chat/completions -d '{"model":"auto","messages":[...]}'</code>
-        <span style="font-size:11px;color:var(--text-3)">or start a Benchmark →</span>
+        <div class="feed-empty-actions">
+          <button class="btn btn-sm btn-primary goto-tab" data-goto="benchmark">
+            <i data-lucide="bar-chart-2" width="12" height="12"></i>
+            Run benchmark
+          </button>
+          <button class="btn btn-sm goto-tab" data-goto="custom">
+            <i data-lucide="send" width="12" height="12"></i>
+            Send custom request
+          </button>
+        </div>
       </div>
     </div>
   </section>
 
   <!-- ── Benchmark tab ── -->
-  <section id="panel-benchmark" class="panel">
+  <section id="panel-benchmark" class="panel" role="tabpanel">
     <div class="bench-layout">
 
-      <!-- Left: controls -->
       <div class="bench-controls">
         <div class="card">
-          <div class="card-label">Configuration</div>
+          <div class="card-label">Scenario</div>
 
-          <div class="field-row">
-            <div class="field-label"><span>Scenario</span></div>
-            <select id="bench-scenario">
-              <option value="baseline">Baseline — fixed model</option>
-              <option value="arbiter" selected>Arbiter — auto routing</option>
-              <option value="round_robin">Round-robin</option>
-              <option value="random">Random — uniform sampling</option>
-            </select>
-            <p id="scenario-hint" class="scenario-hint"></p>
+          <div class="scenario-cards" id="scenario-cards">
+            <button type="button" class="scenario-card" data-scenario="baseline">
+              <span class="scenario-card-icon"><i data-lucide="anchor" width="16" height="16"></i></span>
+              <span class="scenario-card-body">
+                <div class="scenario-card-title">Baseline</div>
+                <div class="scenario-card-desc">All requests to one fixed tier</div>
+              </span>
+            </button>
+            <button type="button" class="scenario-card selected" data-scenario="arbiter">
+              <span class="scenario-card-icon"><i data-lucide="git-branch" width="16" height="16"></i></span>
+              <span class="scenario-card-body">
+                <div class="scenario-card-title">Arbiter</div>
+                <div class="scenario-card-desc">LinUCB bandit auto routing</div>
+              </span>
+            </button>
+            <button type="button" class="scenario-card" data-scenario="round_robin">
+              <span class="scenario-card-icon"><i data-lucide="repeat" width="16" height="16"></i></span>
+              <span class="scenario-card-body">
+                <div class="scenario-card-title">Round-robin</div>
+                <div class="scenario-card-desc">Cycles small → medium → large</div>
+              </span>
+            </button>
+            <button type="button" class="scenario-card" data-scenario="random">
+              <span class="scenario-card-icon"><i data-lucide="shuffle" width="16" height="16"></i></span>
+              <span class="scenario-card-body">
+                <div class="scenario-card-title">Random</div>
+                <div class="scenario-card-desc">Uniform random tier per request</div>
+              </span>
+            </button>
           </div>
+
+          <select id="bench-scenario" class="scenario-select-hidden" aria-hidden="true" tabindex="-1">
+            <option value="baseline">Baseline</option>
+            <option value="arbiter" selected>Arbiter</option>
+            <option value="round_robin">Round-robin</option>
+            <option value="random">Random</option>
+          </select>
+          <p id="scenario-hint" class="scenario-hint"></p>
 
           <div class="field-row" id="baseline-model-row" style="display:none">
             <div class="field-label"><span>Baseline model</span></div>
@@ -113,6 +150,8 @@
               <option value="small">Small (1b)</option>
             </select>
           </div>
+
+          <div class="card-label" style="margin-top:8px;margin-bottom:0">Load parameters</div>
 
           <div class="field-row">
             <div class="field-label">
@@ -138,7 +177,7 @@
             <input type="range" id="bench-duration" min="30" max="600" step="30" value="180" />
           </div>
 
-          <div class="btn-row">
+          <div class="btn-row" id="bench-btn-row">
             <button class="btn btn-primary" id="bench-start">
               <i data-lucide="play" width="12" height="12"></i>
               Start
@@ -156,7 +195,6 @@
         </div>
       </div>
 
-      <!-- Right: stats + chart + comparison -->
       <div class="bench-right">
         <div class="stat-grid">
           <div class="stat-cell">
@@ -191,8 +229,8 @@
         </div>
 
         <div id="compare-card" class="compare-card hidden">
-          <div class="card-label">Comparison</div>
-          <div class="compare-table" id="compare-table"><!-- injected --></div>
+          <div class="card-label">Comparison — baseline vs arbiter</div>
+          <div class="compare-table" id="compare-table"></div>
         </div>
       </div>
 
@@ -200,32 +238,60 @@
   </section>
 
   <!-- ── Metrics tab ── -->
-  <section id="panel-metrics" class="panel">
+  <section id="panel-metrics" class="panel" role="tabpanel">
     <div id="metrics-banner" class="banner hidden"></div>
+
+    <div class="metrics-kpi-strip">
+      <div class="kpi-card">
+        <div class="kpi-ring" id="kpi-slo-ring">
+          <div class="kpi-ring-bg" id="kpi-slo-ring-bg" style="--ring-pct: 0%; --ring-color: var(--olive)">
+            <span class="kpi-ring-value" id="kpi-slo-ring-val">—</span>
+          </div>
+        </div>
+        <div class="kpi-body">
+          <div class="kpi-label">SLO attainment</div>
+          <div class="kpi-detail" id="metric-slo-detail">—</div>
+        </div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-ring">
+          <div class="kpi-ring-bg" id="kpi-bandit-ring-bg" style="--ring-pct: 0%; --ring-color: var(--clay)">
+            <span class="kpi-ring-value" id="kpi-bandit-ring-val">—</span>
+          </div>
+        </div>
+        <div class="kpi-body">
+          <div class="kpi-label">Bandit policy</div>
+          <div class="kpi-detail" id="metric-bandit-kpi">—</div>
+        </div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-body" style="padding-left:4px">
+          <div class="kpi-label">Total request rate</div>
+          <div class="big-num" id="kpi-total-rps" style="font-size:32px;margin-top:4px">—</div>
+          <div class="kpi-detail" id="kpi-total-rps-detail">req/s across tiers</div>
+        </div>
+      </div>
+    </div>
+
     <div class="metrics-layout">
       <div class="metric-card">
         <div class="card-label">Request rate by tier</div>
-        <canvas id="chart-tier-rate" style="max-height:180px"></canvas>
+        <canvas id="chart-tier-rate"></canvas>
       </div>
       <div class="metric-card">
         <div class="card-label">Routing decisions (5m)</div>
-        <canvas id="chart-reasons" style="max-height:180px"></canvas>
+        <canvas id="chart-reasons"></canvas>
       </div>
       <div class="metric-card">
         <div class="card-label">Cost proxy rate</div>
-        <canvas id="chart-cost" style="max-height:180px"></canvas>
-      </div>
-      <div class="metric-card">
-        <div class="card-label">SLO attainment</div>
-        <div class="big-num" id="metric-slo">—</div>
-        <div class="sub-text" id="metric-slo-detail"></div>
+        <canvas id="chart-cost"></canvas>
       </div>
       <div class="metric-card">
         <div class="card-label">Bandit convergence</div>
-        <div style="font-family:var(--mono);font-size:18px;font-weight:700;margin-bottom:12px" id="metric-bandit">—</div>
+        <div style="font-family:var(--mono);font-size:16px;font-weight:600;margin-bottom:12px;color:var(--text-2)" id="metric-bandit">—</div>
         <div id="metric-bandit-obs"></div>
       </div>
-      <div class="metric-card">
+      <div class="metric-card" style="grid-column: span 2">
         <div class="card-label">Endpoint health</div>
         <div id="metric-endpoints" class="ep-list">
           <span class="sub-text">No data</span>
@@ -235,46 +301,60 @@
   </section>
 
   <!-- ── Custom request tab ── -->
-  <section id="panel-custom" class="panel">
+  <section id="panel-custom" class="panel" role="tabpanel">
     <div class="custom-layout">
 
-      <div class="card">
-        <div class="card-label">Send a request</div>
+      <div class="custom-col">
+        <div class="card">
+          <div class="card-label">Send a request</div>
 
-        <div class="field-row">
-          <textarea id="custom-input" class="custom-textarea"
-            placeholder="Enter your message…" rows="4"></textarea>
-        </div>
-
-        <div class="custom-controls">
-          <div class="field-row" style="flex:1">
-            <div class="field-label"><span>Model</span></div>
-            <select id="custom-model">
-              <option value="auto" selected>auto (bandit chooses)</option>
-              <option value="small">small (1b)</option>
-              <option value="medium">medium (3b)</option>
-              <option value="large">large (8b)</option>
-            </select>
+          <div class="field-row">
+            <textarea id="custom-input" class="custom-textarea"
+              placeholder="Enter your message…" rows="6"></textarea>
           </div>
-          <button class="btn btn-primary" id="custom-send" style="margin-bottom:1px">
-            <i data-lucide="send" width="12" height="12"></i>
-            Send
-          </button>
+
+          <div class="custom-controls">
+            <div class="field-row" style="flex:1;min-width:140px">
+              <div class="field-label"><span>Model</span></div>
+              <select id="custom-model">
+                <option value="auto" selected>auto (bandit chooses)</option>
+                <option value="small">small (1b)</option>
+                <option value="medium">medium (3b)</option>
+                <option value="large">large (8b)</option>
+              </select>
+            </div>
+            <button class="btn btn-primary" id="custom-send">
+              <i data-lucide="send" width="12" height="12"></i>
+              Send
+            </button>
+          </div>
+          <p class="custom-hint"><kbd style="font-family:var(--mono);font-size:10px;padding:2px 5px;background:var(--surface-2);border:1px solid var(--border);border-radius:4px">⌘</kbd> / <kbd style="font-family:var(--mono);font-size:10px;padding:2px 5px;background:var(--surface-2);border:1px solid var(--border);border-radius:4px">Ctrl</kbd> + Enter to send</p>
         </div>
       </div>
 
-      <div id="custom-result" class="hidden">
-        <div class="card-label" style="margin-bottom:10px">Response</div>
-        <div id="custom-response" class="custom-response-box"></div>
+      <div class="custom-col">
+        <div id="custom-result" class="card hidden">
+          <div class="card-label">Response</div>
+          <div id="custom-response" class="custom-response-box"></div>
 
-        <div id="custom-routing" class="custom-routing-row hidden" style="margin-top:10px">
-          <!-- injected by JS -->
+          <div id="custom-routing" class="custom-routing-row hidden" style="margin-top:12px"></div>
+
+          <div class="custom-actions">
+            <button class="btn btn-sm" id="custom-copy-btn" style="display:none">
+              <i data-lucide="copy" width="11" height="11"></i>
+              Copy response
+            </button>
+            <button class="btn btn-sm" id="custom-audit-btn" style="display:none">
+              <i data-lucide="file-text" width="11" height="11"></i>
+              View full audit
+            </button>
+          </div>
         </div>
 
-        <button class="btn btn-sm" id="custom-audit-btn" style="margin-top:10px;display:none">
-          <i data-lucide="file-text" width="11" height="11"></i>
-          View full audit
-        </button>
+        <div id="custom-placeholder" class="card" style="opacity:0.6">
+          <div class="card-label">Response</div>
+          <p class="sub-text" style="padding:24px 0;text-align:center">Send a request to see the model response and routing metadata here.</p>
+        </div>
       </div>
 
     </div>
@@ -283,26 +363,37 @@
 </main>
 
 <!-- Audit modal -->
-<div id="audit-modal" class="modal hidden">
+<div id="audit-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="audit-modal-title">
   <div class="modal-box">
     <div class="modal-head">
-      <span class="modal-title">Routing audit</span>
+      <span class="modal-title" id="audit-modal-title">Routing audit</span>
       <div class="modal-actions">
         <button class="btn btn-sm" id="audit-copy">
           <i data-lucide="copy" width="11" height="11"></i>
           Copy
         </button>
-        <button class="icon-btn" id="modal-close">
+        <button class="icon-btn" id="modal-close" aria-label="Close">
           <i data-lucide="x" width="14" height="14"></i>
         </button>
       </div>
     </div>
+    <div class="audit-tabs" role="tablist">
+      <button class="audit-tab active" data-audit-tab="summary" role="tab" aria-selected="true">Summary</button>
+      <button class="audit-tab" data-audit-tab="raw" role="tab" aria-selected="false">Raw JSON</button>
+    </div>
     <div class="modal-body">
       <div id="audit-spinner" class="spinner hidden"></div>
-      <pre id="audit-json"></pre>
+      <div id="audit-panel-summary" class="audit-panel active">
+        <div id="audit-summary" class="audit-summary"></div>
+      </div>
+      <div id="audit-panel-raw" class="audit-panel">
+        <pre id="audit-json"></pre>
+      </div>
     </div>
   </div>
 </div>
+
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
 
 <script src="/console/static/app.js"></script>
 </body>

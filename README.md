@@ -21,28 +21,32 @@ pip install -e ".[dev]"
 make start        # or: arbiter → start
 ```
 
-That's it. The console opens automatically at **http://localhost:8080/console**.
+That's it. The console opens automatically at **[http://localhost:8080/console](http://localhost:8080/console)**.
 
 **Entry points** (all installed by `pip install -e ".[dev]"`):
 
-| Command | What it does |
-|---|---|
-| `arbiter` | Interactive terminal REPL — stack control, benchmarks, debug |
-| `make start` / `make dev` | Non-interactive stack bootstrap (same as `arbiter start`) |
-| `inference-arbiter` | Run the gateway directly (no Docker; needs Ollama at `:11434`) |
+
+| Command                   | What it does                                                   |
+| ------------------------- | -------------------------------------------------------------- |
+| `arbiter`                 | Interactive terminal REPL — stack control, benchmarks, debug   |
+| `make start` / `make dev` | Non-interactive stack bootstrap (same as `arbiter start`)      |
+| `inference-arbiter`       | Run the gateway directly (no Docker; needs Ollama at `:11434`) |
+
 
 ---
 
 ## The Console
 
-Everything is accessible from one URL: **http://localhost:8080/console**
+Everything is accessible from one URL: **[http://localhost:8080/console](http://localhost:8080/console)**
 
-| Tab | What it shows |
-|---|---|
-| **Live** | Every request as it routes in real time. Click any row for the full audit trail. |
-| **Benchmark** | Built-in load tester. Run scenarios, watch RPS + latency live, compare results. |
-| **Metrics** | SLO attainment, bandit convergence, tier distribution, endpoint health via Prometheus. |
-| **Custom** | Send a one-off request and see the routing decision, response, and audit trail. |
+
+| Tab           | What it shows                                                                          |
+| ------------- | -------------------------------------------------------------------------------------- |
+| **Live**      | Every request as it routes in real time. Click any row for the full audit trail.       |
+| **Benchmark** | Built-in load tester. Run scenarios, watch RPS + latency live, compare results.        |
+| **Metrics**   | SLO attainment, bandit convergence, tier distribution, endpoint health via Prometheus. |
+| **Custom**    | Send a one-off request and see the routing decision, response, and audit trail.        |
+
 
 ---
 
@@ -145,12 +149,14 @@ curl http://localhost:8080/v1/chat/completions \
 
 **Response headers** on every request:
 
-| Header | Meaning |
-|---|---|
-| `X-Model-Tier` | Which tier actually served the response |
-| `X-Routing-Reason` | Why that tier was chosen |
-| `X-Tiers-Attempted` | All tiers tried in order |
-| `X-Elapsed-Ms` | Total gateway latency |
+
+| Header              | Meaning                                 |
+| ------------------- | --------------------------------------- |
+| `X-Model-Tier`      | Which tier actually served the response |
+| `X-Routing-Reason`  | Why that tier was chosen                |
+| `X-Tiers-Attempted` | All tiers tried in order                |
+| `X-Elapsed-Ms`      | Total gateway latency                   |
+
 
 ---
 
@@ -205,6 +211,7 @@ docker compose up -d
 Go to the **Benchmark tab** at `http://localhost:8080/console`. Choose a scenario, set users and duration, hit Start. Results appear live, and a comparison card shows up automatically after running two scenarios.
 
 **Scenarios:**
+
 - **Baseline** — all requests to a single fixed tier (choose large/medium/small)
 - **Arbiter** — bandit-routed
 - **Round-robin** — cycles small → medium → large
@@ -231,6 +238,7 @@ The console Metrics tab covers daily use. For deeper analysis:
 - **Raw metrics:** `http://localhost:8080/metrics` (Prometheus format)
 
 Key metrics exported:
+
 - `arbiter_requests_total{tier, reason}` — routing decisions
 - `arbiter_latency_seconds{tier, complexity}` — response latency histogram
 - `arbiter_slo_outcome_total{met, priority}` — SLO attainment counters
@@ -283,10 +291,66 @@ src/inference_arbiter/
 
 ## What Makes This Different
 
-| Feature | inference-arbiter | LiteLLM / Bifrost | RouteLLM / PROTEUS |
-|---|---|---|---|
-| SLO-budget cascade | ✓ wall-clock deadline per tier | — | — |
-| Online bandit learning | ✓ live telemetry | — | offline labels only |
-| Batch admission shedding | ✓ router-layer 503 | — | — |
-| Production infra | ✓ circuit breakers, audit, SSE | ✓ | — |
-| OpenAI compatible | ✓ | ✓ | — |
+vLLM, TGI, and llama.cpp **serve** a model. LiteLLM, Bifrost, and OpenRouter **proxy** cloud APIs. inference-arbiter **arbitrates** between capability tiers on your own hardware — choosing which model should answer each request under a wall-clock SLO, escalating on quality failure, and learning from live production telemetry.
+
+It is a routing control plane, not a model server. Your backends (Ollama, vLLM, TGI) stay unchanged; you point your OpenAI client at `:8080` with `model: "auto"`.
+
+### Where it sits in the stack
+
+| Category | Examples | What they optimize | What inference-arbiter adds |
+| --- | --- | --- | --- |
+| Model servers | vLLM, TGI, llama.cpp server | Throughput, KV-cache, batching for one model | Capability-tier selection across small/medium/large with cost-aware learning |
+| Replica routers | vLLM Router | Load-balance identical replicas | Rank tiers by prompt complexity + live load, not round-robin |
+| Provider proxies | LiteLLM, Bifrost, OpenRouter | Multi-cloud API failover | Self-hosted tier routing with online bandit rewards |
+| Academic routers | RouteLLM, PROTEUS, FrugalGPT | Offline preference labels / cascade papers | Production control plane: admission shedding, circuit breakers, audit API, Prometheus |
+| Orchestration | Ray Serve | DIY deployment graphs | Opinionated Admission → Bandit → Executor → Telemetry pipeline with explainable per-request decisions |
+
+### Three things only a routing control plane can do
+
+**1. SLO-budget-decay cascade**
+
+Each request carries a wall-clock deadline (`x_slo_deadline_ms`). Before calling a tier, the executor checks estimated time-to-first-token against the remaining budget. If a tier's response fails structural verification (empty output, invalid JSON, truncated text), the gateway escalates to the next bandit-ranked tier — but only if budget remains. This is deadline-aware escalation, not blind retry-on-error.
+
+**2. Router-layer batch shedding**
+
+Interactive and batch traffic are classified at admission (`x_priority`). When P95 latency spikes or queues saturate, batch requests are rejected at the router with `503 + Retry-After` before they reach any model. Interactive traffic keeps stable latency under load instead of competing in the same server-side queue.
+
+**3. Online contextual bandit learning**
+
+A LinUCB bandit ranks tiers using a 16-dimensional feature vector extracted from each prompt (token estimate, code blocks, complexity keywords, current queue depth, live latency). Rewards come from actual production outcomes — verification pass/fail, latency, cost proxy — with infrastructure failures (5xx, circuit open) filtered out so they don't poison routing weights. The bandit learns from your traffic, not offline Arena labels.
+
+### When to use inference-arbiter
+
+**Use when:**
+
+- You run multiple model tiers (small/medium/large, or cost/capability tiers) on shared hardware
+- You need deadline-aware routing with explainable decisions (`X-Model-Tier`, `X-Tiers-Attempted`, audit API)
+- You want `model: "auto"` that learns which tier works for which prompts over time
+- You need to benchmark routing strategies (baseline vs arbiter vs round-robin) with built-in load testing
+
+**Don't use when:**
+
+- You need faster inference for a single model (use vLLM or TGI directly)
+- You only need replica load balancing across identical deployments (use vLLM Router)
+- You need multi-cloud provider proxying and API key rotation (use LiteLLM or OpenRouter)
+
+### Feature comparison
+
+| Feature | inference-arbiter | vLLM / TGI | LiteLLM / OpenRouter | RouteLLM / PROTEUS | Ray Serve |
+| --- | --- | --- | --- | --- | --- |
+| Runs inference | — (routes only) | ✓ | — (proxies) | — | ✓ (you deploy) |
+| Multi-tier capability routing | ✓ 1b / 3b / 8b | — single model | — provider selection | ✓ offline router | DIY pipelines |
+| SLO-budget cascade | ✓ wall-clock per tier | — | — | — | DIY |
+| Quality-driven escalation | ✓ structural verifiers | — | — | paper-level | DIY |
+| Online bandit learning | ✓ live telemetry | — | — | offline labels | — |
+| Batch admission shedding | ✓ router-layer 503 | — | — | — | DIY |
+| Per-request audit trail | ✓ full RequestContext | — | — | — | DIY |
+| Circuit breakers + Prometheus | ✓ | partial | partial | — | DIY |
+| OpenAI compatible gateway | ✓ | ✓ | ✓ | — | DIY |
+| Built-in benchmark console | ✓ | — | — | — | — |
+
+### One-liner
+
+> Point your OpenAI SDK at `:8080` with `model: "auto"` — inference-arbiter learns which tier to try first, escalates when quality or SLO demands it, and sheds batch traffic before interactive latency degrades.
+
+
