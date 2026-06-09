@@ -78,6 +78,7 @@ class AppState:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    import os
     state: AppState = app.state.arbiter
     init_tracer(state.settings)
     state.http_client = httpx.AsyncClient(timeout=state.settings.http_timeout_s)
@@ -89,6 +90,14 @@ async def lifespan(app: FastAPI):
         state.bandit,
         interval_s=state.settings.updater_interval_s,
     )
+    checkpoint = state.settings.bandit_checkpoint_path
+    if checkpoint and os.path.exists(checkpoint):
+        try:
+            state.bandit.load(checkpoint)
+            logger.info("bandit_checkpoint_loaded", path=checkpoint,
+                        total_updates=state.bandit.total_updates)
+        except Exception as exc:
+            logger.warning("bandit_checkpoint_load_failed", path=checkpoint, error=str(exc))
     await state.bandit_updater.start()
     logger.info(
         "gateway_started",
@@ -99,6 +108,13 @@ async def lifespan(app: FastAPI):
     yield
     if state.bandit_updater:
         await state.bandit_updater.stop()
+    if checkpoint and state.bandit.total_updates > 0:
+        try:
+            state.bandit.save(checkpoint)
+            logger.info("bandit_checkpoint_saved", path=checkpoint,
+                        total_updates=state.bandit.total_updates)
+        except Exception as exc:
+            logger.warning("bandit_checkpoint_save_failed", path=checkpoint, error=str(exc))
     if state.http_client:
         await state.http_client.aclose()
 
@@ -360,6 +376,8 @@ def create_app() -> FastAPI:
             prometheus_url=st.settings.prometheus_url,
             get_audit_record=st.audit.get,
             get_health=console_health,
+            bandit=st.bandit,
+            bandit_checkpoint_path=st.settings.bandit_checkpoint_path,
         )
         app.include_router(console_router)
 

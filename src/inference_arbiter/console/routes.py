@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from pathlib import Path
 from typing import Any, Literal
 
@@ -19,10 +20,11 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 
 class BenchmarkStartRequest(BaseModel):
-    scenario: Literal["baseline", "arbiter", "round_robin"] = "arbiter"
+    scenario: Literal["baseline", "arbiter", "round_robin", "random"] = "arbiter"
     users: int = Field(default=10, ge=1, le=200)
     spawn_rate: float = Field(default=2.0, ge=0.1, le=50)
     duration_s: float = Field(default=180.0, ge=10, le=3600)
+    baseline_model: str = Field(default="large", pattern="^(small|medium|large)$")
 
 
 def create_console_router(
@@ -31,6 +33,8 @@ def create_console_router(
     prometheus_url: str,
     get_audit_record,
     get_health,
+    bandit=None,
+    bandit_checkpoint_path: str = "",
 ) -> APIRouter:
     router = APIRouter()
 
@@ -89,6 +93,7 @@ def create_console_router(
             users=body.users,
             spawn_rate=body.spawn_rate,
             duration_s=body.duration_s,
+            baseline_model=body.baseline_model,
         )
 
     @router.post("/console/api/benchmark/stop")
@@ -98,5 +103,21 @@ def create_console_router(
     @router.get("/console/api/benchmark/status")
     async def benchmark_status():
         return await benchmark_runner.status()
+
+    @router.get("/console/api/bandit/checkpoint")
+    async def bandit_checkpoint():
+        path = bandit_checkpoint_path
+        exists = bool(path and os.path.exists(path))
+        result: dict[str, Any] = {
+            "path": path or None,
+            "exists": exists,
+        }
+        if bandit is not None:
+            result["total_updates"] = bandit.total_updates
+            result["policy_active"] = bandit.policy_active
+            result["observations_per_tier"] = {
+                t.value: bandit.observations_per_tier[t] for t in bandit.arms
+            }
+        return result
 
     return router

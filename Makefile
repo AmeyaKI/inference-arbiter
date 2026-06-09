@@ -24,7 +24,7 @@ dev:
 	@bash scripts/dev.sh
 
 menu:
-	@./arbiter
+	@bash scripts/arbiter
 
 up:
 	docker compose up -d
@@ -40,7 +40,8 @@ bench:
 		baseline) USER=BaselineUser ;; \
 		arbiter) USER=ArbiterUser ;; \
 		round_robin) USER=RoundRobinUser ;; \
-		*) echo "Unknown SCENARIO: $(SCENARIO). Use baseline|arbiter|round_robin"; exit 1 ;; \
+		random) USER=RandomUser ;; \
+		*) echo "Unknown SCENARIO: $(SCENARIO). Use baseline|arbiter|round_robin|random"; exit 1 ;; \
 	esac; \
 	.venv/bin/locust -f load/locustfile.py $$USER \
 		--host $(HOST) --headless -u $(USERS) -r $(SPAWN_RATE) -t $(DURATION)

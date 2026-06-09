@@ -77,16 +77,21 @@ if (durEl) durEl.addEventListener("input", () => { durLbl.textContent = `${durEl
 // ── scenario hints ────────────────────────────────────────────
 
 const HINTS = {
-  baseline:    "Routes every request to the large (8b) model — no routing intelligence. Use as the cost and latency ceiling.",
+  baseline:    "All requests go to one fixed model tier. Useful as a cost and latency ceiling. Choose the tier below.",
   arbiter:     "LinUCB bandit selects tier based on prompt complexity + SLO budget. The system under test.",
   round_robin: "Cycles evenly across small / medium / large. Simulates naive load distribution.",
+  random:      "Each request goes to a uniformly random tier. Good baseline for comparing against intelligent routing.",
 };
 
 const scenarioSel = document.getElementById("bench-scenario");
 const scenarioHint = document.getElementById("scenario-hint");
+const baselineModelRow = document.getElementById("baseline-model-row");
 
 function refreshHint() {
   if (scenarioHint) scenarioHint.textContent = HINTS[scenarioSel.value] || "";
+  if (baselineModelRow) {
+    baselineModelRow.style.display = scenarioSel.value === "baseline" ? "" : "none";
+  }
 }
 scenarioSel.addEventListener("change", refreshHint);
 refreshHint();
@@ -227,10 +232,11 @@ document.getElementById("bench-start").addEventListener("click", startBench);
 document.getElementById("bench-stop").addEventListener("click", stopBench);
 
 async function startBench() {
-  const scenario  = document.getElementById("bench-scenario").value;
-  const users     = parseInt(document.getElementById("bench-users").value, 10);
-  const spawnRate = parseFloat(document.getElementById("bench-ramp").value);
-  const durationS = parseFloat(document.getElementById("bench-duration").value);
+  const scenario     = document.getElementById("bench-scenario").value;
+  const users        = parseInt(document.getElementById("bench-users").value, 10);
+  const spawnRate    = parseFloat(document.getElementById("bench-ramp").value);
+  const durationS    = parseFloat(document.getElementById("bench-duration").value);
+  const baselineModel = document.getElementById("baseline-model")?.value || "large";
 
   benchStartTime  = Date.now();
   benchDuration   = durationS;
@@ -239,7 +245,7 @@ async function startBench() {
 
   document.getElementById("bench-start").disabled = true;
   document.getElementById("bench-stop").disabled  = false;
-  document.getElementById("stat-running").textContent = "starting";
+  document.getElementById("stat-elapsed").textContent = "0:00";
 
   const rampWrap = document.getElementById("ramp-wrap");
   rampWrap.classList.remove("hidden");
@@ -251,7 +257,13 @@ async function startBench() {
   await fetch("/console/api/benchmark/start", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ scenario, users, spawn_rate: spawnRate, duration_s: durationS }),
+    body: JSON.stringify({
+      scenario,
+      users,
+      spawn_rate: spawnRate,
+      duration_s: durationS,
+      baseline_model: baselineModel,
+    }),
   });
 
   benchPollTimer = setInterval(pollBench, 1000);
@@ -261,9 +273,11 @@ async function stopBench() {
   await fetch("/console/api/benchmark/stop", { method: "POST" });
   clearInterval(benchPollTimer);
   benchPollTimer = null;
+  benchStartTime = null;
   document.getElementById("bench-start").disabled  = false;
   document.getElementById("bench-stop").disabled   = true;
   document.getElementById("ramp-wrap").classList.add("hidden");
+  document.getElementById("stat-elapsed").textContent = "—";
   pollBench();
 }
 
@@ -278,22 +292,24 @@ async function pollBench() {
     document.getElementById("stat-p50").textContent = fmtMs(data.p50_ms);
     document.getElementById("stat-p95").textContent = fmtMs(data.p95_ms);
 
-    // Ramp-up progress
+    // Elapsed timer + ramp-up progress
     if (benchStartTime && data.running) {
       const elapsed = (Date.now() - benchStartTime) / 1000;
+      const mins = Math.floor(elapsed / 60);
+      const secs = Math.floor(elapsed % 60);
+      document.getElementById("stat-elapsed").textContent =
+        `${mins}:${String(secs).padStart(2, "0")}`;
+
       const rampSec = Math.ceil(benchUsers / benchSpawnRate);
       const rampWrap = document.getElementById("ramp-wrap");
-
       if (elapsed < rampSec) {
         rampWrap.classList.remove("hidden");
         const p = Math.min(elapsed / rampSec, 1);
         document.getElementById("ramp-fill").style.width = `${p * 100}%`;
         document.getElementById("ramp-label").textContent =
           `Ramping up… ${Math.round(p * benchUsers)}/${benchUsers} workers`;
-        document.getElementById("stat-running").textContent = "ramping";
       } else {
         rampWrap.classList.add("hidden");
-        document.getElementById("stat-running").textContent = "running";
       }
     }
 
@@ -315,9 +331,9 @@ async function pollBench() {
       document.getElementById("bench-start").disabled  = false;
       document.getElementById("bench-stop").disabled   = true;
       document.getElementById("ramp-wrap").classList.add("hidden");
-      document.getElementById("stat-running").textContent = "idle";
       clearInterval(benchPollTimer);
       benchPollTimer = null;
+      benchStartTime = null;
     }
 
     renderComparison(data.completed_runs || {});
@@ -577,6 +593,90 @@ function renderPie(id, series) {
     },
   });
 }
+
+// ── custom request tab ───────────────────────────────────────
+
+let lastCustomRequestId = null;
+
+document.getElementById("custom-send").addEventListener("click", sendCustomRequest);
+document.getElementById("custom-input").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) sendCustomRequest();
+});
+
+async function sendCustomRequest() {
+  const content = document.getElementById("custom-input").value.trim();
+  if (!content) return;
+
+  const model   = document.getElementById("custom-model").value;
+  const sendBtn = document.getElementById("custom-send");
+  const result  = document.getElementById("custom-result");
+  const box     = document.getElementById("custom-response");
+  const routing = document.getElementById("custom-routing");
+  const auditBtn = document.getElementById("custom-audit-btn");
+
+  sendBtn.disabled = true;
+  sendBtn.innerHTML = '<span class="spinner" style="width:12px;height:12px;margin:0;border-width:2px"></span> Sending…';
+  result.classList.remove("hidden");
+  box.textContent = "…";
+  routing.classList.add("hidden");
+  auditBtn.style.display = "none";
+
+  const t0 = performance.now();
+  try {
+    const resp = await fetch("/v1/chat/completions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model,
+        messages: [{ role: "user", content }],
+      }),
+    });
+
+    const elapsed = Math.round(performance.now() - t0);
+    const tier    = resp.headers.get("x-model-tier") || "—";
+    const reason  = resp.headers.get("x-routing-reason") || "—";
+    const attempted = resp.headers.get("x-tiers-attempted") || "—";
+    lastCustomRequestId = resp.headers.get("x-request-id") || null;
+
+    if (!resp.ok) {
+      box.textContent = `HTTP ${resp.status}: ${await resp.text()}`;
+    } else {
+      const data = await resp.json();
+      const text = data?.choices?.[0]?.message?.content || "(empty response)";
+      box.textContent = text;
+
+      const tierCls_ = tierCls(tier);
+      routing.innerHTML = `
+        <div class="tier-cell ${tierCls_}">
+          <span class="tier-pip"></span>
+          <span class="tier-label-text">${esc(tier)}</span>
+        </div>
+        <span class="custom-routing-sep">·</span>
+        <span>reason: <strong>${esc(reason)}</strong></span>
+        <span class="custom-routing-sep">·</span>
+        <span>tiers tried: ${esc(attempted)}</span>
+        <span class="custom-routing-sep">·</span>
+        <span class="${latCls(elapsed)}">${fmtMs(elapsed)}</span>
+      `;
+      routing.classList.remove("hidden");
+      lucide.createIcons({ nodes: [routing] });
+
+      if (lastCustomRequestId) {
+        auditBtn.style.display = "";
+      }
+    }
+  } catch (e) {
+    box.textContent = String(e);
+  } finally {
+    sendBtn.disabled = false;
+    sendBtn.innerHTML = '<i data-lucide="send" width="12" height="12"></i> Send';
+    lucide.createIcons({ nodes: [sendBtn] });
+  }
+}
+
+document.getElementById("custom-audit-btn").addEventListener("click", () => {
+  if (lastCustomRequestId) showAudit(lastCustomRequestId);
+});
 
 // ── init ──────────────────────────────────────────────────────
 

@@ -78,6 +78,8 @@ class Settings(BaseSettings):
     prometheus_url: str = "http://127.0.0.1:9090"
     event_buffer_size: int = 500
 
+    bandit_checkpoint_path: str = "data/bandit_checkpoint.npz"
+
 
 def _load_yaml_defaults() -> dict[str, Any]:
     if not _CONFIG_PATH.exists():

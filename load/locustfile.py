@@ -2,7 +2,7 @@
 
 For interactive benchmarking, use the unified console instead:
 
-  ./arbiter         # or: make dev
+  bash scripts/arbiter   # or: make dev
   open http://localhost:8080/console
 
 Headless CI / advanced usage:
@@ -29,6 +29,7 @@ from inference_arbiter.benchmark.prompts import (
 __all__ = [
     "ArbiterUser",
     "BaselineUser",
+    "RandomUser",
     "RoundRobinUser",
     "mixed_prompt",
 ]
@@ -101,9 +102,32 @@ class BaselineUser(HttpUser):
     wait_time = between(0.1, 0.5)
 
     @task
-    def all_large(self):
+    def all_fixed(self):
+        import os
+        model = os.environ.get("BASELINE_MODEL", "large")
         payload = {
-            "model": "large",
+            "model": model,
+            "messages": [{"role": "user", "content": mixed_prompt()}],
+            "max_tokens": 64,
+        }
+        with self.client.post(
+            "/v1/chat/completions",
+            json=payload,
+            catch_response=True,
+            timeout=120,
+        ) as resp:
+            if resp.status_code >= 500:
+                resp.failure(f"status {resp.status_code}")
+
+
+class RandomUser(HttpUser):
+    wait_time = between(0.1, 0.5)
+
+    @task
+    def random_tier(self):
+        tier = random.choice(["small", "medium", "large"])
+        payload = {
+            "model": tier,
             "messages": [{"role": "user", "content": mixed_prompt()}],
             "max_tokens": 64,
         }

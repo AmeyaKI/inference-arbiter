@@ -47,6 +47,10 @@
     <i data-lucide="layout-dashboard" width="13" height="13"></i>
     Metrics
   </button>
+  <button class="tab" data-tab="custom">
+    <i data-lucide="send" width="13" height="13"></i>
+    Custom
+  </button>
 </nav>
 
 <main>
@@ -93,11 +97,21 @@
           <div class="field-row">
             <div class="field-label"><span>Scenario</span></div>
             <select id="bench-scenario">
-              <option value="baseline">Baseline — all large</option>
+              <option value="baseline">Baseline — fixed model</option>
               <option value="arbiter" selected>Arbiter — auto routing</option>
               <option value="round_robin">Round-robin</option>
+              <option value="random">Random — uniform sampling</option>
             </select>
             <p id="scenario-hint" class="scenario-hint"></p>
+          </div>
+
+          <div class="field-row" id="baseline-model-row" style="display:none">
+            <div class="field-label"><span>Baseline model</span></div>
+            <select id="baseline-model">
+              <option value="large" selected>Large (8b)</option>
+              <option value="medium">Medium (3b)</option>
+              <option value="small">Small (1b)</option>
+            </select>
           </div>
 
           <div class="field-row">
@@ -166,8 +180,8 @@
             <div class="stat-value" id="stat-p95">—</div>
           </div>
           <div class="stat-cell">
-            <div class="stat-label">Status</div>
-            <div class="stat-value muted" id="stat-running">idle</div>
+            <div class="stat-label">Elapsed</div>
+            <div class="stat-value muted" id="stat-elapsed">—</div>
           </div>
         </div>
 
@@ -217,6 +231,52 @@
           <span class="sub-text">No data</span>
         </div>
       </div>
+    </div>
+  </section>
+
+  <!-- ── Custom request tab ── -->
+  <section id="panel-custom" class="panel">
+    <div class="custom-layout">
+
+      <div class="card">
+        <div class="card-label">Send a request</div>
+
+        <div class="field-row">
+          <textarea id="custom-input" class="custom-textarea"
+            placeholder="Enter your message…" rows="4"></textarea>
+        </div>
+
+        <div class="custom-controls">
+          <div class="field-row" style="flex:1">
+            <div class="field-label"><span>Model</span></div>
+            <select id="custom-model">
+              <option value="auto" selected>auto (bandit chooses)</option>
+              <option value="small">small (1b)</option>
+              <option value="medium">medium (3b)</option>
+              <option value="large">large (8b)</option>
+            </select>
+          </div>
+          <button class="btn btn-primary" id="custom-send" style="margin-bottom:1px">
+            <i data-lucide="send" width="12" height="12"></i>
+            Send
+          </button>
+        </div>
+      </div>
+
+      <div id="custom-result" class="hidden">
+        <div class="card-label" style="margin-bottom:10px">Response</div>
+        <div id="custom-response" class="custom-response-box"></div>
+
+        <div id="custom-routing" class="custom-routing-row hidden" style="margin-top:10px">
+          <!-- injected by JS -->
+        </div>
+
+        <button class="btn btn-sm" id="custom-audit-btn" style="margin-top:10px;display:none">
+          <i data-lucide="file-text" width="11" height="11"></i>
+          View full audit
+        </button>
+      </div>
+
     </div>
   </section>
 

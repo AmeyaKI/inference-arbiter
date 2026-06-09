@@ -15,7 +15,7 @@ def main() -> int:
     results = {
         "console_url": "http://localhost:8080/console",
         "recommended_workflow": [
-            "./arbiter  # or: make dev",
+            "bash scripts/arbiter  # or: make dev",
             "Open http://localhost:8080/console",
             "Run Baseline then Arbiter from Benchmark tab",
             "Compare results in footer strip",
@@ -44,7 +44,7 @@ def main() -> int:
     out = RESULTS_DIR / "latest.json"
     out.write_text(json.dumps(results, indent=2))
     print(f"Wrote eval scaffold to {out}")
-    print("Recommended: ./arbiter  →  http://localhost:8080/console")
+    print("Recommended: bash scripts/arbiter  →  http://localhost:8080/console")
     return 0
 
 

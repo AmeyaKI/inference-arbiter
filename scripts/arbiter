@@ -2,7 +2,7 @@
 # arbiter — inference-arbiter interactive control plane
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
 GW="${ARBITER_URL:-http://localhost:8080}"
@@ -26,58 +26,52 @@ gw_status() {
   fi
 }
 
-# ── menu ──────────────────────────────────────────────────────
+# ── help ──────────────────────────────────────────────────────
 
-show_menu() {
-  clear
+show_help() {
   echo
   echo -e "  ${B}inference-arbiter${R}  ${D}routing control plane${R}"
   echo
   gw_status
   echo
   echo -e "  ${D}── stack ─────────────────────────────────────────${R}"
-  echo -e "  ${B}1${R}  start      spin up docker stack + open console"
-  echo -e "  ${B}2${R}  stop       shut down all services"
-  echo -e "  ${B}3${R}  rebuild    rebuild images + restart"
-  echo -e "  ${B}4${R}  status     gateway + per-model readiness"
-  echo -e "  ${B}5${R}  logs       tail gateway logs"
+  echo -e "  ${B}start${R}      spin up docker stack + open console"
+  echo -e "  ${B}stop${R}       shut down all services"
+  echo -e "  ${B}rebuild${R}    rebuild images + restart"
+  echo -e "  ${B}status${R}     gateway + per-model readiness"
+  echo -e "  ${B}logs${R}       tail gateway logs"
   echo
   echo -e "  ${D}── benchmark ─────────────────────────────────────${R}"
-  echo -e "  ${B}6${R}  compare    quick baseline vs arbiter  (2 users · 60s)"
-  echo -e "  ${B}7${R}  bench      full run                   (10 users · 3 min)"
+  echo -e "  ${B}compare${R}    quick baseline vs arbiter  (2 users · 60s)"
+  echo -e "  ${B}bench${R}      full run                   (10 users · 3 min)"
   echo
   echo -e "  ${D}── debug ─────────────────────────────────────────${R}"
-  echo -e "  ${B}8${R}  test       send one auto-routed request"
-  echo -e "  ${B}9${R}  console    open console in browser"
-  echo -e "  ${B}0${R}  exit"
+  echo -e "  ${B}test${R}       send one auto-routed request"
+  echo -e "  ${B}console${R}    open console in browser"
+  echo -e "  ${B}exit${R}       quit"
   echo
-  printf "  ${D}→${R} "
 }
 
 # ── commands ──────────────────────────────────────────────────
 
 cmd_start() {
-  echo -e "\n  ${B}Starting stack…${R}"
-  bash scripts/dev.sh
+  echo -e "  ${B}Starting stack…${R}"
+  bash "$(dirname "$0")/dev.sh"
 }
 
 cmd_stop() {
-  echo -e "\n  ${B}Stopping…${R}"
+  echo -e "  ${B}Stopping…${R}"
   docker compose down
   echo -e "  ${GRN}Done.${R}"
-  read -rp $'\n  Press enter…' _
 }
 
 cmd_rebuild() {
-  echo -e "\n  ${B}Rebuilding images…${R}"
+  echo -e "  ${B}Rebuilding images…${R}"
   docker compose up -d --build
   echo -e "  ${GRN}Done.${R} Gateway restarting — check: curl $GW/healthz"
-  read -rp $'\n  Press enter…' _
 }
 
 cmd_status() {
-  echo -e "\n  ${B}Status${R}\n"
-
   if HEALTH=$(curl -sf --max-time 3 "$GW/healthz" 2>/dev/null); then
     MODE=$(  python3 -c "import sys,json; d=json.loads(sys.argv[1]); print(d.get('routing_mode','?'))"         "$HEALTH" 2>/dev/null || echo "?")
     BANDIT=$(python3 -c "import sys,json; d=json.loads(sys.argv[1]); print('active' if d.get('bandit_policy_active') else 'heuristic')" "$HEALTH" 2>/dev/null || echo "?")
@@ -100,55 +94,40 @@ PY
   else
     echo -e "  ${YLW}⚠${R}  /readyz not found — rebuild to pick up latest image"
   fi
-
-  echo
-  read -rp "  Press enter…" _
 }
 
 cmd_logs() {
-  echo -e "\n  ${D}Ctrl+C to exit${R}\n"
+  echo -e "  ${D}Ctrl+C to return to prompt${R}"
   docker compose logs -f gateway
 }
 
 cmd_compare() {
-  echo -e "\n  ${B}Quick comparison${R}  ${D}2 users · 60s each${R}\n"
+  echo -e "  ${B}Quick comparison${R}  ${D}2 users · 60s each${R}"
   echo -e "  ${D}[1/2] Baseline (all large)…${R}"
   make bench SCENARIO=baseline USERS=2 DURATION=60 2>/dev/null || \
     echo -e "  ${YLW}Skipped — Locust not installed (make install)${R}"
-  echo
   echo -e "  ${D}[2/2] Arbiter (auto routing)…${R}"
   make bench SCENARIO=arbiter USERS=2 DURATION=60 2>/dev/null || \
     echo -e "  ${YLW}Skipped — Locust not installed (make install)${R}"
-  echo
   echo -e "  ${GRN}Done.${R} Open console for comparison: ${BLU}$GW/console${R}"
-  read -rp $'\n  Press enter…' _
 }
 
 cmd_bench() {
-  echo -e "\n  ${B}Full benchmark${R}  ${D}10 users · 3 min${R}\n"
-  echo -e "  ${D}1${R}  baseline    all large model"
-  echo -e "  ${D}2${R}  arbiter     auto routing"
-  echo -e "  ${D}3${R}  round-robin equal distribution"
-  echo -e "  ${D}4${R}  all three   sequential"
-  echo
-  printf "  ${D}→${R} "
-  read -r sub
+  echo -e "  ${B}Full benchmark${R}  ${D}choose scenario${R}"
+  echo -e "  baseline / arbiter / round_robin"
+  printf "  ${D}scenario →${R} "
+  IFS= read -r sub
   case "$sub" in
-    1) make bench SCENARIO=baseline    USERS=10 DURATION=180 ;;
-    2) make bench SCENARIO=arbiter     USERS=10 DURATION=180 ;;
-    3) make bench SCENARIO=round_robin USERS=10 DURATION=180 ;;
-    4)
-      make bench SCENARIO=baseline    USERS=10 DURATION=180
-      make bench SCENARIO=arbiter     USERS=10 DURATION=180
-      make bench SCENARIO=round_robin USERS=10 DURATION=180
-      ;;
-    *) echo -e "  ${D}Cancelled.${R}" ;;
+    baseline)    make bench SCENARIO=baseline    USERS=10 DURATION=180 ;;
+    arbiter)     make bench SCENARIO=arbiter     USERS=10 DURATION=180 ;;
+    round_robin) make bench SCENARIO=round_robin USERS=10 DURATION=180 ;;
+    '') echo -e "  ${D}Cancelled.${R}" ;;
+    *) echo -e "  ${YLW}Unknown scenario '$sub'. Use: baseline | arbiter | round_robin${R}" ;;
   esac
-  read -rp $'\n  Press enter…' _
 }
 
 cmd_test() {
-  echo -e "\n  ${B}Sending test request…${R}\n"
+  echo -e "  ${B}Sending test request…${R}"
 
   TMPFILE=$(mktemp)
   HTTP_CODE=$(curl -s -o "$TMPFILE" -w "%{http_code}" \
@@ -170,8 +149,6 @@ try:
 except Exception as e:
     print(f"  (could not parse response: {e})")
 PY
-    echo
-    # Routing headers via a HEAD-style trick — re-request to get headers printed
     HEADERS=$(curl -sD - --max-time 10 \
       -H "Content-Type: application/json" \
       -H "X-Request-ID: arbiter-cli-headers" \
@@ -185,16 +162,14 @@ PY
     fi
   else
     echo -e "  ${RED}HTTP $HTTP_CODE${R}"
-    cat "$TMPFILE" | head -5
+    head -5 "$TMPFILE"
   fi
 
   rm -f "$TMPFILE"
-  echo
-  read -rp "  Press enter…" _
 }
 
 cmd_console() {
-  echo -e "\n  Opening ${BLU}$GW/console${R}"
+  echo -e "  Opening ${BLU}$GW/console${R}"
   if [[ "$(uname)" == "Darwin" ]]; then
     open "$GW/console" 2>/dev/null || true
   elif command -v xdg-open &>/dev/null; then
@@ -202,25 +177,28 @@ cmd_console() {
   else
     echo -e "  ${YLW}Open manually:${R} $GW/console"
   fi
-  sleep 1
 }
 
-# ── main loop ─────────────────────────────────────────────────
+# ── REPL ──────────────────────────────────────────────────────
+
+show_help
 
 while true; do
-  show_menu
-  read -r choice </dev/tty 2>/dev/null || read -r choice
+  printf "\n  ${D}→${R} "
+  IFS= read -r choice || { echo; exit 0; }
   case "$choice" in
-    1) cmd_start   ;;
-    2) cmd_stop    ;;
-    3) cmd_rebuild ;;
-    4) cmd_status  ;;
-    5) cmd_logs    ;;
-    6) cmd_compare ;;
-    7) cmd_bench   ;;
-    8) cmd_test    ;;
-    9) cmd_console ;;
-    0|q|quit|exit) echo; exit 0 ;;
-    *) ;;
+    1|start)        cmd_start   ;;
+    2|stop)         cmd_stop    ;;
+    3|rebuild)      cmd_rebuild ;;
+    4|status)       cmd_status  ;;
+    5|logs)         cmd_logs    ;;
+    6|compare)      cmd_compare ;;
+    7|bench)        cmd_bench   ;;
+    8|test)         cmd_test    ;;
+    9|console)      cmd_console ;;
+    help|h|'?')     show_help   ;;
+    0|q|quit|exit)  echo; exit 0 ;;
+    '')             ;;
+    *) echo -e "  ${YLW}Unknown command '$choice' — type help for a list${R}" ;;
   esac
 done

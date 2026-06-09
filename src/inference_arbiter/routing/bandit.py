@@ -164,6 +164,46 @@ class LinUCBBandit:
         ):
             self._policy_active = True
 
+    def save(self, path: str) -> None:
+        """Persist bandit matrices to disk as a .npz file."""
+        import pathlib
+        p = pathlib.Path(path)
+        if not p.suffix:
+            p = p.with_suffix(".npz")
+        p.parent.mkdir(parents=True, exist_ok=True)
+        arrays: dict[str, np.ndarray] = {}
+        for t in self.arms:
+            arrays[f"a_{t.value}"] = self._a[t]
+            arrays[f"b_{t.value}"] = self._b[t]
+            arrays[f"obs_{t.value}"] = np.array(self.observations_per_tier[t])
+        arrays["total_updates"] = np.array(self._total_updates)
+        arrays["policy_active"] = np.array(self._policy_active)
+        np.savez(str(p), **arrays)
+
+    def load(self, path: str) -> None:
+        """Restore bandit matrices from a .npz checkpoint."""
+        import pathlib
+        p = pathlib.Path(path)
+        if not p.suffix:
+            p = p.with_suffix(".npz")
+        if not p.exists():
+            return
+        data = np.load(str(p))
+        for t in self.arms:
+            a_key = f"a_{t.value}"
+            b_key = f"b_{t.value}"
+            obs_key = f"obs_{t.value}"
+            if a_key in data:
+                self._a[t] = data[a_key]
+            if b_key in data:
+                self._b[t] = data[b_key]
+            if obs_key in data:
+                self.observations_per_tier[t] = int(data[obs_key])
+        if "total_updates" in data:
+            self._total_updates = int(data["total_updates"])
+        if "policy_active" in data:
+            self._policy_active = bool(data["policy_active"])
+
     def compute_reward(
         self,
         *,

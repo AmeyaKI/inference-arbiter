@@ -19,7 +19,7 @@ from inference_arbiter.benchmark.prompts import (
     mixed_prompt,
 )
 
-Scenario = Literal["baseline", "arbiter", "round_robin"]
+Scenario = Literal["baseline", "arbiter", "round_robin", "random"]
 
 
 def _percentile(values: list[float], pct: float) -> float:
@@ -73,6 +73,7 @@ class BenchmarkRunner:
         self._stop = asyncio.Event()
         self._tier_cycle = itertools.cycle(["small", "medium", "large"])
         self._completed_runs: dict[str, dict[str, Any]] = {}
+        self._baseline_model: str = "large"
 
     @property
     def completed_runs(self) -> dict[str, dict[str, Any]]:
@@ -84,10 +85,12 @@ class BenchmarkRunner:
         users: int = 10,
         spawn_rate: float = 2.0,
         duration_s: float = 180.0,
+        baseline_model: str = "large",
     ) -> dict[str, Any]:
         if self.stats.running:
             return {"error": "benchmark already running", "status": self.stats.snapshot()}
         self._stop = asyncio.Event()
+        self._baseline_model = baseline_model
         self.stats = BenchmarkStats(
             scenario=scenario,
             running=True,
@@ -176,13 +179,19 @@ class BenchmarkRunner:
     def _build_payload(self, scenario: Scenario) -> dict[str, Any]:
         if scenario == "baseline":
             return {
-                "model": "large",
+                "model": self._baseline_model,
                 "messages": [{"role": "user", "content": mixed_prompt()}],
                 "max_tokens": 64,
             }
         if scenario == "round_robin":
             return {
                 "model": next(self._tier_cycle),
+                "messages": [{"role": "user", "content": mixed_prompt()}],
+                "max_tokens": 64,
+            }
+        if scenario == "random":
+            return {
+                "model": random.choice(["small", "medium", "large"]),
                 "messages": [{"role": "user", "content": mixed_prompt()}],
                 "max_tokens": 64,
             }

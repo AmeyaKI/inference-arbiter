@@ -20,12 +20,14 @@ Client → Gateway → Admission → Bandit → Executor → Ollama (1b/3b/8b)
                    shed BATCH          Verifiers + Telemetry → Bandit updater
 ```
 
+
 | Subsystem | Module                        | Role                                               |
 | --------- | ----------------------------- | -------------------------------------------------- |
 | A         | `routing/admission.py`        | INTERACTIVE/BATCH admission, P95 spike shedding    |
 | B         | `routing/bandit.py`           | LinUCB ranked tier selection, heuristic cold start |
 | C         | `routing/executor.py`         | SLO cascade loop with `RequestContext`             |
 | D         | `verification/`, `telemetry/` | Fast verifiers + ring buffer + background updater  |
+
 
 ## Quickstart
 
@@ -34,14 +36,15 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
 
-./arbiter         # interactive menu (stack, bench, debug)
+bash scripts/arbiter   # interactive CLI (stack, bench, debug)
 make dev          # starts stack + opens unified console
 make test         # unit + integration tests
 ```
 
-**One URL for everything:** http://localhost:8080/console
+**One URL for everything:** [http://localhost:8080/console](http://localhost:8080/console)
 
 From the console you can:
+
 - Watch requests route in real time (Live tab)
 - Run Baseline vs Arbiter benchmarks (Benchmark tab)
 - View SLO, cost, and bandit KPIs (Metrics tab)
@@ -71,11 +74,11 @@ Or click any request in the console Live tab.
 
 ## Configuration
 
-All tunables in [`config.yaml`](config.yaml). Environment overrides use `ARBITER_*` prefix (env wins over YAML).
+All tunables in `[config.yaml](config.yaml)`. Environment overrides use `ARBITER_*` prefix (env wins over YAML).
 
 ## Benchmarking
 
-**Recommended:** use the console Benchmark tab at http://localhost:8080/console
+**Recommended:** use the console Benchmark tab at [http://localhost:8080/console](http://localhost:8080/console)
 
 **Headless (CI):**
 
@@ -91,8 +94,8 @@ Legacy aliases: `make load-baseline`, `make load-arbiter`, `make load-round-robi
 
 Prometheus and Grafana still run via Docker for power users:
 
-- Prometheus: http://localhost:9090
-- Grafana: http://localhost:3000 (`admin` / `admin`)
+- Prometheus: [http://localhost:9090](http://localhost:9090)
+- Grafana: [http://localhost:3000](http://localhost:3000) (`admin` / `admin`)
 - Dashboard: `deploy/grafana/dashboards/inference-arbiter.json`
 
 The console Metrics tab queries Prometheus on your behalf — you don't need to open Grafana for daily use.
@@ -106,9 +109,10 @@ The console Metrics tab queries Prometheus on your behalf — you don't need to 
 ## Development
 
 ```bash
-./arbiter             # interactive control plane (or: make menu)
+bash scripts/arbiter    # interactive control plane (or: make menu)
 .venv/bin/pytest tests/ -v
 .venv/bin/ruff check src/
 make run              # gateway only (needs Ollama at :11434)
 make console          # print console URL
 ```
+
