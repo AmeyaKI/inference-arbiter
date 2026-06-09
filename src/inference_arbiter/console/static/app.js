@@ -4,20 +4,20 @@ const MAX_ROWS = 120;
 const COLD_START_OBS = 500;
 
 const CHART_THEME = {
-  grid: "#2e2c28",
-  ticks: "#b0aea5",
+  grid: "#eceae6",
+  ticks: "#6b6966",
   font: "'JetBrains Mono'",
-  accent: "#d97757",
-  accentFill: "rgba(217, 119, 87, 0.12)",
+  accent: "#d4522a",
+  accentFill: "rgba(212, 82, 42, 0.08)",
   colors: {
-    olive: "#788c5d",
-    clay: "#d97757",
-    fig: "#c46686",
-    sky: "#6a9bcc",
-    cactus: "#bcd1ca",
+    olive:  "#2e7d4f",
+    clay:   "#d4522a",
+    fig:    "#c03050",
+    sky:    "#0070f3",
+    cactus: "#2a8c72",
   },
-  barColors: ["#788c5d", "#d97757", "#c46686", "#6a9bcc"],
-  pieColors: ["#d97757", "#788c5d", "#c46686", "#6a9bcc", "#bcd1ca"],
+  barColors: ["#2e7d4f", "#d4522a", "#c03050", "#0070f3"],
+  pieColors: ["#d4522a", "#2e7d4f", "#c03050", "#0070f3", "#2a8c72"],
 };
 
 const liveFeed = document.getElementById("live-feed");
@@ -32,7 +32,11 @@ let benchUsers = 0;
 let benchSpawnRate = 0;
 let lastAuditData = null;
 let activeAuditTab = "summary";
+let benchMode = "duration";
+let lastCompletedRunsKey = "";
 const charts = {};
+
+const rdiagCounts = { small: 0, medium: 0, large: 0 };
 
 // ── helpers ──────────────────────────────────────────────────
 
@@ -143,6 +147,46 @@ document.querySelectorAll(".goto-tab").forEach((btn) => {
 const durEl = document.getElementById("bench-duration");
 const durLbl = document.getElementById("val-duration");
 if (durEl) durEl.addEventListener("input", () => { durLbl.textContent = `${durEl.value}s`; });
+
+// ── routing diagram toggle ───────────────────────────────────
+const rdiagToggle = document.getElementById("routing-diagram-toggle");
+const rdiagBody = document.getElementById("routing-diagram-body");
+const rdiagChevron = document.getElementById("routing-diagram-chevron");
+
+if (rdiagToggle) {
+  rdiagToggle.addEventListener("click", () => {
+    const expanded = rdiagToggle.getAttribute("aria-expanded") === "true";
+    rdiagToggle.setAttribute("aria-expanded", !expanded);
+    if (rdiagBody) rdiagBody.style.display = expanded ? "none" : "";
+    if (rdiagChevron) {
+      rdiagChevron.setAttribute("data-lucide", expanded ? "chevron-down" : "chevron-up");
+      lucide.createIcons({ nodes: [rdiagChevron] });
+    }
+  });
+}
+
+// ── bench mode toggle ─────────────────────────────────────────
+const benchModeDurationBtn = document.getElementById("bench-mode-duration");
+const benchModeRequestsBtn = document.getElementById("bench-mode-requests");
+const benchDurationRow = document.getElementById("bench-duration-row");
+const benchRequestsRow = document.getElementById("bench-requests-row");
+
+function setBenchMode(mode) {
+  benchMode = mode;
+  if (benchModeDurationBtn) benchModeDurationBtn.classList.toggle("active", mode === "duration");
+  if (benchModeRequestsBtn) benchModeRequestsBtn.classList.toggle("active", mode === "requests");
+  if (benchDurationRow) benchDurationRow.style.display = mode === "duration" ? "" : "none";
+  if (benchRequestsRow) benchRequestsRow.style.display = mode === "requests" ? "" : "none";
+}
+
+if (benchModeDurationBtn) benchModeDurationBtn.addEventListener("click", () => setBenchMode("duration"));
+if (benchModeRequestsBtn) benchModeRequestsBtn.addEventListener("click", () => setBenchMode("requests"));
+
+const maxReqEl = document.getElementById("bench-max-requests");
+const maxReqLbl = document.getElementById("val-max-requests");
+if (maxReqEl && maxReqLbl) {
+  maxReqEl.addEventListener("input", () => { maxReqLbl.textContent = maxReqEl.value; });
+}
 
 // ── scenario cards ───────────────────────────────────────────
 
@@ -265,6 +309,22 @@ function addFeedRow(event) {
 
   const rows = liveFeed.querySelectorAll(".feed-row");
   if (rows.length > MAX_ROWS) rows[rows.length - 1].remove();
+
+  requestAnimationFrame(() => row.classList.remove("entering"));
+
+  pulseRouteDiagram(tier);
+}
+
+function pulseRouteDiagram(tier) {
+  const t = (tier || "").toLowerCase();
+  if (!["small", "medium", "large"].includes(t)) return;
+  rdiagCounts[t] = (rdiagCounts[t] || 0) + 1;
+  const countEl = document.getElementById(`rdiag-count-${t}`);
+  if (countEl) countEl.textContent = rdiagCounts[t];
+  const pathEl = document.getElementById(`rdiag-path-${t}`);
+  if (!pathEl) return;
+  pathEl.classList.add("pulsing");
+  setTimeout(() => pathEl.classList.remove("pulsing"), 600);
 }
 
 // ── audit modal ───────────────────────────────────────────────
@@ -366,19 +426,23 @@ function renderAuditSummary(data) {
       <span class="audit-request-id">${esc(data.request_id)}</span>
       ${priorityBadge(data.priority)}
       ${data.final_tier ? tierPill(data.final_tier) : ""}
-      ${data.routing_reason ? `<span class="chip">reason: <strong>${esc(data.routing_reason)}</strong></span>` : ""}
+    </div>
+    <div class="audit-meta-grid" style="margin-top:0">
+      <span>model requested: <strong>${esc(data.requested_model || "auto")}</strong></span>
+      <span>status: <strong>${esc(data.status || "—")}</strong></span>
+      <span>routing reason: <strong>${esc(data.routing_reason || "—")}</strong></span>
+      <span>tiers attempted: <strong>${esc((data.routing_history || []).map(s => s.tier).join(" → ") || "—")}</strong></span>
     </div>
     ${sloHtml}
     <div class="audit-section-title" style="margin-top:8px">Cascade timeline</div>
     <div class="cascade-timeline">${steps || '<span class="sub-text">No tier attempts recorded.</span>'}</div>
     ${banditHtml}
+    ${Object.keys(payload).length > 0 ? `
     <div class="audit-section-title" style="margin-top:8px">Prompt metadata</div>
     <div class="audit-meta-grid">
       <span>tokens: <strong>${payload.estimated_tokens ?? "—"}</strong></span>
       <span>hash: <strong>${esc(payload.prompt_hash || "—")}</strong></span>
-      <span>model requested: <strong>${esc(data.requested_model || "auto")}</strong></span>
-      <span>status: <strong>${esc(data.status || "—")}</strong></span>
-    </div>
+    </div>` : ""}
   `;
 }
 
@@ -444,6 +508,7 @@ async function startBench() {
   const users = parseInt(document.getElementById("bench-users").value, 10);
   const spawnRate = parseFloat(document.getElementById("bench-ramp").value);
   const durationS = parseFloat(document.getElementById("bench-duration").value);
+  const maxRequests = parseInt(document.getElementById("bench-max-requests")?.value || "0", 10);
   const baselineModel = document.getElementById("baseline-model")?.value || "large";
 
   benchStartTime = Date.now();
@@ -462,16 +527,19 @@ async function startBench() {
 
   initBenchChart();
 
+  const body = {
+    scenario,
+    users,
+    spawn_rate: spawnRate,
+    baseline_model: baselineModel,
+    duration_s: benchMode === "requests" ? 86400 : durationS,
+    max_requests: benchMode === "requests" ? maxRequests : 0,
+  };
+
   await fetch("/console/api/benchmark/start", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      scenario,
-      users,
-      spawn_rate: spawnRate,
-      duration_s: durationS,
-      baseline_model: baselineModel,
-    }),
+    body: JSON.stringify(body),
   });
 
   benchPollTimer = setInterval(pollBench, 1000);
@@ -549,7 +617,12 @@ async function pollBench() {
       benchStartTime = null;
     }
 
-    renderComparison(data.completed_runs || {});
+    const runs = data.completed_runs || {};
+    const key = JSON.stringify(runs);
+    if (key !== lastCompletedRunsKey) {
+      lastCompletedRunsKey = key;
+      renderComparison(runs);
+    }
   } catch (_) {}
 }
 
@@ -666,7 +739,7 @@ function renderComparison(runs) {
 // ── metrics tab ──────────────────────────────────────────────
 
 function startMetricsPoll() {
-  pollMetrics();
+  requestAnimationFrame(() => pollMetrics());
   metricsPollTimer = setInterval(pollMetrics, 5000);
 }
 

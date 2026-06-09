@@ -25,6 +25,7 @@ class BenchmarkStartRequest(BaseModel):
     spawn_rate: float = Field(default=2.0, ge=0.1, le=50)
     duration_s: float = Field(default=180.0, ge=10, le=3600)
     baseline_model: str = Field(default="large", pattern="^(small|medium|large)$")
+    max_requests: int = Field(default=0, ge=0, le=10000)
 
 
 def create_console_router(
@@ -94,11 +95,12 @@ def create_console_router(
             spawn_rate=body.spawn_rate,
             duration_s=body.duration_s,
             baseline_model=body.baseline_model,
+            max_requests=body.max_requests,
         )
 
     @router.post("/console/api/benchmark/stop")
     async def benchmark_stop():
-        return await benchmark_runner.stop()
+        return benchmark_runner.stop_nowait()
 
     @router.get("/console/api/benchmark/status")
     async def benchmark_status():

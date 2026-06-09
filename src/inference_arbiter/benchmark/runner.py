@@ -37,6 +37,7 @@ class BenchmarkStats:
     running: bool = False
     started_at: float | None = None
     duration_s: float = 0.0
+    max_requests: int = 0
     users: int = 0
     spawn_rate: float = 0.0
     requests: int = 0
@@ -51,6 +52,7 @@ class BenchmarkStats:
             "scenario": self.scenario,
             "running": self.running,
             "duration_s": self.duration_s,
+            "max_requests": self.max_requests,
             "elapsed_s": round(elapsed, 2),
             "users": self.users,
             "spawn_rate": self.spawn_rate,
@@ -86,6 +88,7 @@ class BenchmarkRunner:
         spawn_rate: float = 2.0,
         duration_s: float = 180.0,
         baseline_model: str = "large",
+        max_requests: int = 0,
     ) -> dict[str, Any]:
         if self.stats.running:
             return {"error": "benchmark already running", "status": self.stats.snapshot()}
@@ -96,10 +99,11 @@ class BenchmarkRunner:
             running=True,
             started_at=time.time(),
             duration_s=duration_s,
+            max_requests=max_requests,
             users=users,
             spawn_rate=spawn_rate,
         )
-        self._task = asyncio.create_task(self._run(scenario, users, spawn_rate, duration_s))
+        self._task = asyncio.create_task(self._run(scenario, users, spawn_rate, duration_s, max_requests))
         return self.stats.snapshot()
 
     async def stop(self) -> dict[str, Any]:
@@ -115,6 +119,15 @@ class BenchmarkRunner:
             self._completed_runs[self.stats.scenario] = snap
         return snap
 
+    def stop_nowait(self) -> dict[str, Any]:
+        self._stop.set()
+        self.stats.running = False
+        snap = self.stats.snapshot()
+        if self.stats.scenario:
+            self._completed_runs[self.stats.scenario] = snap
+        self._save_result(snap)
+        return snap
+
     async def status(self) -> dict[str, Any]:
         data = self.stats.snapshot()
         data["completed_runs"] = self._completed_runs
@@ -126,6 +139,7 @@ class BenchmarkRunner:
         users: int,
         spawn_rate: float,
         duration_s: float,
+        max_requests: int = 0,
     ) -> None:
         deadline = time.time() + duration_s
         workers: list[asyncio.Task[None]] = []
@@ -140,6 +154,9 @@ class BenchmarkRunner:
                     await asyncio.sleep(1.0 / max(spawn_rate, 0.1))
 
                 while time.time() < deadline and not self._stop.is_set():
+                    if max_requests > 0 and self.stats.requests >= max_requests:
+                        self._stop.set()
+                        break
                     await asyncio.sleep(0.5)
 
                 self._stop.set()
@@ -150,6 +167,7 @@ class BenchmarkRunner:
             snap = self.stats.snapshot()
             if self.stats.scenario:
                 self._completed_runs[self.stats.scenario] = snap
+            self._save_result(snap)
 
     async def _worker(
         self,
@@ -205,3 +223,16 @@ class BenchmarkRunner:
         if slo_ms:
             payload["x_slo_deadline_ms"] = slo_ms
         return payload
+
+    def _save_result(self, snap: dict) -> None:
+        import datetime
+        import json
+        import pathlib
+
+        if not snap.get("scenario") or snap.get("requests", 0) == 0:
+            return
+        d = pathlib.Path("benchmarks/results")
+        d.mkdir(parents=True, exist_ok=True)
+        ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        fname = f"{snap['scenario']}_{ts}.json"
+        (d / fname).write_text(json.dumps(snap, indent=2))
