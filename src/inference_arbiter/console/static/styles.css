@@ -409,6 +409,28 @@ main { flex: 1; overflow: hidden; display: flex; flex-direction: column; }
 
 .scenario-hint { font-size: 11px; color: var(--text-4); line-height: 1.5; margin-top: 2px; }
 
+.param-input {
+  width: 62px;
+  padding: 2px 6px;
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  text-align: right;
+  -moz-appearance: textfield;
+  transition: border-color var(--transition), box-shadow var(--transition);
+}
+.param-input::-webkit-inner-spin-button,
+.param-input::-webkit-outer-spin-button { opacity: 0.6; cursor: pointer; }
+.param-input:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-dim);
+}
+
 select {
   width: 100%; background: var(--surface); border: 1px solid var(--border);
   color: var(--text); padding: 8px 32px 8px 10px;

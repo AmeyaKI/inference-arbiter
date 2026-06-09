@@ -136,17 +136,27 @@ document.querySelectorAll(".goto-tab").forEach((btn) => {
   });
 });
 
-// ── sliders ───────────────────────────────────────────────────
+// ── sliders (bidirectional slider ↔ number input sync) ────────
 
-["users", "ramp"].forEach((key) => {
-  const el = document.getElementById(`bench-${key}`);
-  const lbl = document.getElementById(`val-${key}`);
-  if (el && lbl) el.addEventListener("input", () => { lbl.textContent = el.value; });
-});
+function syncParam(sliderId, inputId) {
+  const slider = document.getElementById(sliderId);
+  const input  = document.getElementById(inputId);
+  if (!slider || !input) return;
 
-const durEl = document.getElementById("bench-duration");
-const durLbl = document.getElementById("val-duration");
-if (durEl) durEl.addEventListener("input", () => { durLbl.textContent = `${durEl.value}s`; });
+  slider.addEventListener("input", () => { input.value = slider.value; });
+
+  input.addEventListener("input", () => {
+    const v = Number(input.value);
+    if (!isNaN(v)) slider.value = Math.min(slider.max, Math.max(slider.min, v));
+  });
+
+  input.addEventListener("blur", () => { input.value = slider.value; });
+}
+
+syncParam("bench-users",        "val-users");
+syncParam("bench-ramp",         "val-ramp");
+syncParam("bench-duration",     "val-duration");
+syncParam("bench-max-requests", "val-max-requests");
 
 // ── routing diagram toggle ───────────────────────────────────
 const rdiagToggle = document.getElementById("routing-diagram-toggle");
@@ -507,8 +517,8 @@ async function startBench() {
   const scenario = document.getElementById("bench-scenario").value;
   const users = parseInt(document.getElementById("bench-users").value, 10);
   const spawnRate = parseFloat(document.getElementById("bench-ramp").value);
-  const durationS = parseFloat(document.getElementById("bench-duration").value);
-  const maxRequests = parseInt(document.getElementById("bench-max-requests")?.value || "0", 10);
+  const durationS = parseFloat(document.getElementById("val-duration").value) || 180;
+  const maxRequests = parseInt(document.getElementById("val-max-requests")?.value || "0", 10);
   const baselineModel = document.getElementById("baseline-model")?.value || "large";
 
   benchStartTime = Date.now();
@@ -612,9 +622,11 @@ async function pollBench() {
       document.getElementById("bench-stop").disabled = true;
       document.getElementById("bench-btn-row").classList.remove("btn-running");
       document.getElementById("ramp-wrap").classList.add("hidden");
+      document.getElementById("stat-elapsed").textContent = "—";
       clearInterval(benchPollTimer);
       benchPollTimer = null;
       benchStartTime = null;
+      showToast("Benchmark complete");
     }
 
     const runs = data.completed_runs || {};

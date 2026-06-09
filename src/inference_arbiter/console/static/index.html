@@ -187,15 +187,15 @@
           <div class="field-row">
             <div class="field-label">
               <span>Concurrent users</span>
-              <span class="field-val" id="val-users">10</span>
+              <input type="number" class="param-input" id="val-users" min="1" max="50" value="10" />
             </div>
             <input type="range" id="bench-users" min="1" max="50" value="10" />
           </div>
 
           <div class="field-row">
             <div class="field-label">
-              <span>Ramp / sec</span>
-              <span class="field-val" id="val-ramp">2</span>
+              <span># Users Ramp / sec</span>
+              <input type="number" class="param-input" id="val-ramp" min="1" max="10" value="2" />
             </div>
             <input type="range" id="bench-ramp" min="1" max="10" value="2" />
           </div>
@@ -216,8 +216,8 @@
 
           <div class="field-row" id="bench-duration-row">
             <div class="field-label">
-              <span>Duration</span>
-              <span class="field-val" id="val-duration">180s</span>
+              <span>Duration (s)</span>
+              <input type="number" class="param-input" id="val-duration" min="30" max="600" step="30" value="180" />
             </div>
             <input type="range" id="bench-duration" min="30" max="600" step="30" value="180" />
           </div>
@@ -225,7 +225,7 @@
           <div class="field-row" id="bench-requests-row" style="display:none">
             <div class="field-label">
               <span>Max requests</span>
-              <span class="field-val" id="val-max-requests">100</span>
+              <input type="number" class="param-input" id="val-max-requests" min="10" max="500" step="10" value="100" />
             </div>
             <input type="range" id="bench-max-requests" min="10" max="500" step="10" value="100" />
           </div>
