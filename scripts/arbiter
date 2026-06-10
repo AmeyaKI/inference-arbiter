@@ -276,7 +276,8 @@ cmd_request() {
   echo
 
   TMPFILE=$(mktemp)
-  HTTP_CODE=$(curl -s -o "$TMPFILE" -w "%{http_code}" \
+  HDRFILE=$(mktemp)
+  HTTP_CODE=$(curl -s -D "$HDRFILE" -o "$TMPFILE" -w "%{http_code}" \
     --max-time 30 \
     -H "Content-Type: application/json" \
     -H "X-Request-ID: arbiter-cli-test" \
@@ -295,13 +296,7 @@ try:
 except Exception as e:
     print(f"  (could not parse response: {e})")
 PY
-    HEADERS=$(curl -sD - --max-time 10 \
-      -H "Content-Type: application/json" \
-      -H "X-Request-ID: arbiter-cli-headers" \
-      "$GW/v1/chat/completions" \
-      -d '{"model":"auto","messages":[{"role":"user","content":"hi"}]}' \
-      -o /dev/null 2>/dev/null \
-      | grep -i "x-model-tier\|x-routing-reason\|x-tiers-attempted\|x-elapsed" || true)
+    HEADERS=$(grep -i "x-model-tier\|x-routing-reason\|x-tiers-attempted\|x-elapsed" "$HDRFILE" || true)
     if [ -n "$HEADERS" ]; then
       echo -e "  ${D}Routing headers:${R}"
       echo "$HEADERS" | while IFS= read -r line; do echo "    $line"; done
@@ -311,7 +306,7 @@ PY
     head -5 "$TMPFILE"
   fi
 
-  rm -f "$TMPFILE"
+  rm -f "$TMPFILE" "$HDRFILE"
 }
 
 cmd_console() {

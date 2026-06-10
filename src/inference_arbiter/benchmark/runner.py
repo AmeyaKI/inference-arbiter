@@ -145,7 +145,7 @@ class BenchmarkRunner:
         workers: list[asyncio.Task[None]] = []
         spawned = 0
         try:
-            async with httpx.AsyncClient(timeout=120.0) as client:
+            async with httpx.AsyncClient(timeout=300.0) as client:
                 while spawned < users and time.time() < deadline and not self._stop.is_set():
                     workers.append(
                         asyncio.create_task(self._worker(client, scenario, deadline))

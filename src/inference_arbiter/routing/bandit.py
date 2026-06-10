@@ -61,9 +61,10 @@ class LinUCBBandit:
         if model not in ("auto", "auto-degraded-ok"):
             pinned = self._resolve_pinned_tier(model)
             if pinned:
-                tiers = sorted(ModelTier, key=tier_order)
-                pref_idx = tier_order(pinned)
-                ranked = [pinned] + [t for t in tiers if t != pinned]
+                # Cascade order: pinned first, then descending by capability so
+                # fallback tries the next-best tier before cheaper ones.
+                rest = sorted([t for t in ModelTier if t != pinned], key=tier_order, reverse=True)
+                ranked = [pinned] + rest
                 if allowed_tiers:
                     ranked = [t for t in ranked if t in allowed_tiers]
                 return ranked or list(ModelTier)

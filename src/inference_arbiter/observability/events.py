@@ -69,8 +69,6 @@ class RoutingEventBus:
         async with self._lock:
             self._subscribers.append(queue)
         try:
-            for event in self._buffer:
-                yield event
             while True:
                 event = await queue.get()
                 if event is None:

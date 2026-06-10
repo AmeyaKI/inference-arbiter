@@ -34,7 +34,7 @@ state:
   ttft_ema_alpha: 0.2
   error_rate_ema_alpha: 0.2
   p95_window_size: 100
-  p95_spike_threshold_ms: 2000.0
+  p95_spike_threshold_ms: 300000.0
   queue_pressure_threshold: 3
   verification_overhead_ms: 1.0
 
