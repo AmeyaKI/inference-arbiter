@@ -350,6 +350,31 @@
           <span class="sub-text">No data</span>
         </div>
       </div>
+
+      <!-- time-series row -->
+      <div class="metric-card ts-card" style="grid-column: span 3">
+        <div class="card-label">Total requests per second</div>
+        <div class="ts-legend">
+          <span class="ts-legend-item"><span class="ts-dot" style="background:#2e7d4f"></span>RPS</span>
+          <span class="ts-legend-item"><span class="ts-dot" style="background:#c03050"></span>Failures/s</span>
+        </div>
+        <canvas id="chart-ts-rps"></canvas>
+      </div>
+      <div class="metric-card ts-card" style="grid-column: span 3">
+        <div class="card-label">Response times (ms)</div>
+        <div class="ts-legend">
+          <span class="ts-legend-item"><span class="ts-dot" style="background:#d4522a"></span>P50</span>
+          <span class="ts-legend-item"><span class="ts-dot" style="background:#7c3aed"></span>P95</span>
+        </div>
+        <canvas id="chart-ts-latency"></canvas>
+      </div>
+      <div class="metric-card ts-card" style="grid-column: span 3">
+        <div class="card-label">Active requests (in-flight)</div>
+        <div class="ts-legend">
+          <span class="ts-legend-item"><span class="ts-dot" style="background:#0070f3"></span>In-flight</span>
+        </div>
+        <canvas id="chart-ts-inflight"></canvas>
+      </div>
     </div>
   </section>
 

@@ -46,8 +46,10 @@ show_help() {
   echo -e "  ${B}bench${R}      full run                   (10 users · 3 min)"
   echo
   echo -e "  ${D}── debug ─────────────────────────────────────────${R}"
-  echo -e "  ${B}test${R}       send one auto-routed request"
+  echo -e "  ${B}request${R}    send one auto-routed request  ${D}[--query \"text\"]${R}"
+  echo -e "  ${B}reset${R}      wipe routing history + live feed (keeps bandit)"
   echo -e "  ${B}console${R}    open console in browser"
+  echo -e "  ${B}clear${R}      clear the terminal"
   echo -e "  ${B}exit${R}       quit"
   echo
 }
@@ -59,10 +61,136 @@ cmd_start() {
   bash "$(dirname "$0")/dev.sh"
 }
 
+cmd_save_results() {
+  local OUTDIR="results/$(date +%Y%m%d_%H%M%S)"
+  mkdir -p "$OUTDIR"
+  echo -e "  ${D}Saving results → $OUTDIR/${R}"
+
+  python3 - "$GW" "$OUTDIR" <<'PY'
+import sys, json, csv, urllib.request, urllib.error
+from datetime import datetime
+
+gw, outdir = sys.argv[1], sys.argv[2]
+
+def fetch(path):
+    try:
+        with urllib.request.urlopen(f"{gw}{path}", timeout=10) as r:
+            return json.loads(r.read())
+    except Exception as e:
+        print(f"  warn: could not fetch {path}: {e}")
+        return None
+
+# ── routing CSV ─────────────────────────────────────────────────
+records = fetch("/console/api/routing/all") or []
+csv_path = f"{outdir}/routing.csv"
+fields = ["request_id", "timestamp", "priority", "requested_model",
+          "final_tier", "routing_reason", "tiers_attempted",
+          "elapsed_ms", "status", "degraded", "failure_attribution",
+          "prompt_preview", "estimated_tokens"]
+with open(csv_path, "w", newline="") as f:
+    w = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
+    w.writeheader()
+    for r in records:
+        payload = r.get("payload") or {}
+        w.writerow({
+            "request_id":        r.get("request_id", ""),
+            "timestamp":         datetime.fromtimestamp(r.get("timestamp", 0)).isoformat() if r.get("timestamp") else "",
+            "priority":          r.get("priority", ""),
+            "requested_model":   r.get("requested_model", ""),
+            "final_tier":        r.get("final_tier", ""),
+            "routing_reason":    r.get("routing_reason", ""),
+            "tiers_attempted":   ",".join(r.get("tiers_attempted") or []),
+            "elapsed_ms":        r.get("metrics", {}).get("current_elapsed_ms", ""),
+            "status":            r.get("status", ""),
+            "degraded":          r.get("degraded", ""),
+            "failure_attribution": r.get("failure_attribution", ""),
+            "prompt_preview":    payload.get("prompt_preview", ""),
+            "estimated_tokens":  payload.get("estimated_tokens", ""),
+        })
+print(f"  routing.csv        {len(records)} records")
+
+# ── metrics summary ─────────────────────────────────────────────
+m = fetch("/console/api/metrics/summary") or {}
+bench = fetch("/console/api/benchmark/status") or {}
+metrics_path = f"{outdir}/metrics.txt"
+with open(metrics_path, "w") as f:
+    f.write(f"inference-arbiter session report\n")
+    f.write(f"generated: {datetime.now().isoformat()}\n")
+    f.write("=" * 48 + "\n\n")
+
+    f.write("ROUTING\n")
+    f.write("-" * 24 + "\n")
+    tier_rate = m.get("tier_rate") or {}
+    for tier, rate in sorted(tier_rate.items()):
+        f.write(f"  {tier:<10} {rate:.2f} req/s\n")
+    reasons = m.get("routing_reasons") or {}
+    if reasons:
+        f.write("\n  Routing reasons (last 5m):\n")
+        for reason, count in sorted(reasons.items(), key=lambda x: -x[1]):
+            f.write(f"    {reason:<30} {int(count)}\n")
+
+    f.write("\nSLO ATTAINMENT\n")
+    f.write("-" * 24 + "\n")
+    slo = m.get("slo_attainment_rate")
+    met = m.get("slo_met", 0)
+    evaluated = m.get("slo_evaluated", 0)
+    if slo is not None:
+        f.write(f"  rate:       {slo * 100:.1f}%\n")
+        f.write(f"  met:        {int(met)}\n")
+        f.write(f"  evaluated:  {int(evaluated)}\n")
+    else:
+        f.write("  (no SLO data — set x_slo_deadline_ms on requests)\n")
+
+    f.write("\nBANDIT\n")
+    f.write("-" * 24 + "\n")
+    f.write(f"  policy active:  {m.get('bandit_policy_active', False)}\n")
+    obs = m.get("bandit_observations") or {}
+    for tier, count in sorted(obs.items()):
+        f.write(f"  {tier:<10} {int(count)} observations\n")
+
+    f.write("\nCOST PROXY (req/s weighted by tier)\n")
+    f.write("-" * 24 + "\n")
+    cost = m.get("cost_rate") or {}
+    for tier, rate in sorted(cost.items()):
+        f.write(f"  {tier:<10} {rate:.3f}\n")
+
+    f.write("\nBENCHMARK RUNS\n")
+    f.write("-" * 24 + "\n")
+    completed = bench.get("completed_runs") or {}
+    if completed:
+        for scenario, stats in completed.items():
+            f.write(f"  {scenario}\n")
+            f.write(f"    requests:  {stats.get('requests', 0)}\n")
+            f.write(f"    p50:       {stats.get('p50_ms', 0):.0f}ms\n")
+            f.write(f"    p95:       {stats.get('p95_ms', 0):.0f}ms\n")
+            f.write(f"    rps:       {stats.get('rps', 0):.2f}\n")
+            f.write(f"    failures:  {stats.get('failures', 0)}\n")
+    else:
+        f.write("  (no completed benchmark runs)\n")
+
+print(f"  metrics.txt        session summary")
+PY
+
+  echo -e "  ${GRN}Saved.${R}  $(ls "$OUTDIR")"
+}
+
 cmd_stop() {
+  if curl -sf --max-time 2 "$GW/healthz" >/dev/null 2>&1; then
+    cmd_save_results
+  fi
   echo -e "  ${B}Stopping…${R}"
   docker compose down
   echo -e "  ${GRN}Done.${R}"
+}
+
+cmd_reset() {
+  echo -e "  ${B}Resetting routing history…${R}"
+  CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$GW/console/api/reset" 2>/dev/null || echo "000")
+  if [ "$CODE" = "200" ]; then
+    echo -e "  ${GRN}Cleared.${R} Audit log and live feed wiped — bandit weights kept."
+  else
+    echo -e "  ${RED}HTTP $CODE${R} — is the gateway running? (make start)"
+  fi
 }
 
 cmd_rebuild() {
@@ -126,8 +254,26 @@ cmd_bench() {
   esac
 }
 
-cmd_test() {
-  echo -e "  ${B}Sending test request…${R}"
+cmd_request() {
+  local args="${1:-}"
+  local query="Respond with only the word, hello."
+
+  if [[ "$args" == *"--query"* ]]; then
+    local after="${args#*--query}"
+    after="${after# }"
+    # strip surrounding quotes if present
+    if [[ "${after:0:1}" == '"' && "${after: -1}" == '"' ]]; then
+      after="${after:1:${#after}-2}"
+    elif [[ "${after:0:1}" == "'" && "${after: -1}" == "'" ]]; then
+      after="${after:1:${#after}-2}"
+    fi
+    query="$after"
+  fi
+
+  local PAYLOAD="{\"model\":\"auto\",\"messages\":[{\"role\":\"user\",\"content\":\"$query\"}]}"
+  echo -e "  ${D}POST $GW/v1/chat/completions${R}"
+  echo -e "  ${D}$PAYLOAD${R}"
+  echo
 
   TMPFILE=$(mktemp)
   HTTP_CODE=$(curl -s -o "$TMPFILE" -w "%{http_code}" \
@@ -135,7 +281,7 @@ cmd_test() {
     -H "Content-Type: application/json" \
     -H "X-Request-ID: arbiter-cli-test" \
     "$GW/v1/chat/completions" \
-    -d '{"model":"auto","messages":[{"role":"user","content":"Say hello in exactly one sentence."}]}' \
+    -d "$PAYLOAD" \
     2>/dev/null || echo "000")
 
   if [ "$HTTP_CODE" = "200" ]; then
@@ -185,20 +331,25 @@ show_help
 
 while true; do
   printf "\n  ${D}→${R} "
-  IFS= read -r choice || { echo; exit 0; }
-  case "$choice" in
-    1|start)        cmd_start   ;;
-    2|stop)         cmd_stop    ;;
-    3|rebuild)      cmd_rebuild ;;
-    4|status)       cmd_status  ;;
-    5|logs)         cmd_logs    ;;
-    6|compare)      cmd_compare ;;
-    7|bench)        cmd_bench   ;;
-    8|test)         cmd_test    ;;
-    9|console)      cmd_console ;;
-    help|h|'?')     show_help   ;;
-    0|q|quit|exit)  echo; exit 0 ;;
+  IFS= read -r _input || { echo; exit 0; }
+  _cmd="${_input%% *}"
+  _args="${_input#"$_cmd"}"
+  _args="${_args# }"
+  case "$_cmd" in
+    1|start)        cmd_start          ;;
+    2|stop)         cmd_stop           ;;
+    3|rebuild)      cmd_rebuild        ;;
+    4|status)       cmd_status         ;;
+    5|logs)         cmd_logs           ;;
+    6|compare)      cmd_compare        ;;
+    7|bench)        cmd_bench          ;;
+    8|request)      cmd_request "$_args" ;;
+    9|console)      cmd_console        ;;
+    reset)          cmd_reset          ;;
+    help|h|'?')     show_help          ;;
+    clear)          clear              ;;
+    0|q|quit|exit)  echo; exit 0       ;;
     '')             ;;
-    *) echo -e "  ${YLW}Unknown command '$choice' — type help for a list${R}" ;;
+    *) echo -e "  ${YLW}Unknown command '$_cmd' — type help for a list${R}" ;;
   esac
 done

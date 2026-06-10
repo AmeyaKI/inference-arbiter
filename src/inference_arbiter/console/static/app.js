@@ -750,14 +750,20 @@ function renderComparison(runs) {
 
 // ── metrics tab ──────────────────────────────────────────────
 
+let tsPollTimer = null;
+
 function startMetricsPoll() {
   requestAnimationFrame(() => pollMetrics());
+  requestAnimationFrame(() => pollTimeseries());
   metricsPollTimer = setInterval(pollMetrics, 5000);
+  tsPollTimer = setInterval(pollTimeseries, 10000);
 }
 
 function stopMetricsPoll() {
   clearInterval(metricsPollTimer);
+  clearInterval(tsPollTimer);
   metricsPollTimer = null;
+  tsPollTimer = null;
 }
 
 function updateKpiRing(elId, valId, pct, color) {
@@ -782,7 +788,14 @@ async function pollMetrics() {
     }
     banner.classList.add("hidden");
 
-    renderBar("chart-tier-rate", data.tier_rate, "req/s");
+    // Use cumulative totals as fallback when the rate window is empty (sparse traffic)
+    const tierRateData = Object.keys(data.tier_rate || {}).length > 0
+      ? data.tier_rate
+      : data.tier_totals && Object.keys(data.tier_totals).length > 0
+        ? Object.fromEntries(Object.entries(data.tier_totals).map(([k, v]) => [k, v]))
+        : {};
+    const tierRateLabel = Object.keys(data.tier_rate || {}).length > 0 ? "req/s" : "total requests";
+    renderBar("chart-tier-rate", tierRateData, tierRateLabel);
     renderPie("chart-reasons", data.routing_reasons);
     renderBar("chart-cost", data.cost_rate, "cost/s");
 
@@ -864,12 +877,36 @@ async function pollMetrics() {
   }
 }
 
+function setChartEmptyState(id, empty) {
+  const ctx = document.getElementById(id);
+  if (!ctx) return;
+  const parent = ctx.parentElement;
+  let msg = parent.querySelector(".chart-empty-msg");
+  if (empty) {
+    ctx.style.display = "none";
+    if (!msg) {
+      msg = document.createElement("div");
+      msg.className = "chart-empty-msg sub-text";
+      msg.textContent = "Waiting for data — send requests to populate";
+      parent.appendChild(msg);
+    }
+  } else {
+    ctx.style.display = "";
+    if (msg) msg.remove();
+  }
+}
+
 function renderBar(id, series, yLabel) {
   const ctx = document.getElementById(id);
   if (!ctx) return;
-  const labels = Object.keys(series);
-  const values = Object.values(series);
-  if (charts[id]) charts[id].destroy();
+  const labels = Object.keys(series || {});
+  const values = Object.values(series || {});
+  if (charts[id]) { charts[id].destroy(); charts[id] = null; }
+  if (labels.length === 0) {
+    setChartEmptyState(id, true);
+    return;
+  }
+  setChartEmptyState(id, false);
   charts[id] = new Chart(ctx, {
     type: "bar",
     data: {
@@ -892,11 +929,17 @@ function renderBar(id, series, yLabel) {
 function renderPie(id, series) {
   const ctx = document.getElementById(id);
   if (!ctx) return;
-  if (charts[id]) charts[id].destroy();
+  const labels = Object.keys(series || {});
+  if (charts[id]) { charts[id].destroy(); charts[id] = null; }
+  if (labels.length === 0) {
+    setChartEmptyState(id, true);
+    return;
+  }
+  setChartEmptyState(id, false);
   charts[id] = new Chart(ctx, {
     type: "doughnut",
     data: {
-      labels: Object.keys(series),
+      labels,
       datasets: [{
         data: Object.values(series),
         backgroundColor: CHART_THEME.pieColors,
@@ -920,6 +963,97 @@ function renderPie(id, series) {
       },
     },
   });
+}
+
+// ── time-series charts ───────────────────────────────────────
+
+function fmtEpochMs(ms) {
+  const d = new Date(ms);
+  return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+
+function makeTsChart(id, datasets) {
+  const ctx = document.getElementById(id);
+  if (!ctx) return null;
+  if (charts[id]) { charts[id].destroy(); charts[id] = null; }
+  return new Chart(ctx, {
+    type: "line",
+    data: { labels: [], datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      interaction: { mode: "index", intersect: false },
+      plugins: { legend: { display: false } },
+      scales: {
+        x: {
+          ticks: {
+            color: CHART_THEME.ticks,
+            font: { family: CHART_THEME.font, size: 10 },
+            maxTicksLimit: 8,
+            maxRotation: 0,
+          },
+          grid: { display: false },
+        },
+        y: {
+          beginAtZero: true,
+          grid: { color: CHART_THEME.grid },
+          ticks: { color: CHART_THEME.ticks, font: { family: CHART_THEME.font, size: 10 } },
+        },
+      },
+    },
+  });
+}
+
+function initTsCharts() {
+  charts["chart-ts-rps"] = makeTsChart("chart-ts-rps", [
+    { label: "RPS",        data: [], borderColor: "#2e7d4f", backgroundColor: "rgba(46,125,79,0.08)", fill: true, tension: 0.3, pointRadius: 3, borderWidth: 2 },
+    { label: "Failures/s", data: [], borderColor: "#c03050", backgroundColor: "rgba(192,48,80,0.06)", fill: false, tension: 0.3, pointRadius: 3, borderWidth: 1.5, borderDash: [4,3] },
+  ]);
+  charts["chart-ts-latency"] = makeTsChart("chart-ts-latency", [
+    { label: "P50 ms", data: [], borderColor: "#d4522a", backgroundColor: "rgba(212,82,42,0.08)", fill: true,  tension: 0.3, pointRadius: 3, borderWidth: 2 },
+    { label: "P95 ms", data: [], borderColor: "#7c3aed", backgroundColor: "rgba(124,58,237,0.06)", fill: false, tension: 0.3, pointRadius: 3, borderWidth: 1.5 },
+  ]);
+  charts["chart-ts-inflight"] = makeTsChart("chart-ts-inflight", [
+    { label: "In-flight", data: [], borderColor: "#0070f3", backgroundColor: "rgba(0,112,243,0.08)", fill: true, tension: 0.3, pointRadius: 3, borderWidth: 2 },
+  ]);
+}
+
+function updateTsChart(id, labels, ...seriesValues) {
+  const c = charts[id];
+  if (!c) return;
+  c.data.labels = labels;
+  seriesValues.forEach((vals, i) => {
+    if (c.data.datasets[i]) c.data.datasets[i].data = vals;
+  });
+  c.update("none");
+}
+
+async function pollTimeseries() {
+  try {
+    const data = await fetch("/console/api/metrics/timeseries").then((r) => r.json());
+    if (!data.available) return;
+
+    if (!charts["chart-ts-rps"]) initTsCharts();
+
+    const allTs = [...(data.rps || []), ...(data.p50_ms || []), ...(data.in_flight || [])];
+    if (allTs.length === 0) return;
+
+    // Build unified time axis from RPS series (most likely to have data)
+    const refSeries = data.rps?.length ? data.rps : data.p50_ms?.length ? data.p50_ms : data.in_flight;
+    const tsMap = new Map(refSeries.map(([ts]) => [ts, fmtEpochMs(ts)]));
+    const labels = [...tsMap.values()];
+    const tsKeys = [...tsMap.keys()];
+
+    function align(series) {
+      const m = new Map((series || []).map(([ts, v]) => [ts, v]));
+      return tsKeys.map((ts) => m.has(ts) ? m.get(ts) : null);
+    }
+
+    updateTsChart("chart-ts-rps",      labels, align(data.rps), align(data.failures_per_s));
+    updateTsChart("chart-ts-latency",  labels, align(data.p50_ms), align(data.p95_ms));
+    updateTsChart("chart-ts-inflight", labels, align(data.in_flight));
+  } catch (_) {}
 }
 
 // ── custom request tab ───────────────────────────────────────

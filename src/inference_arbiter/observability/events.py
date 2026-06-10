@@ -87,5 +87,8 @@ class RoutingEventBus:
         except asyncio.QueueFull:
             pass
 
+    def clear(self) -> None:
+        self._buffer.clear()
+
     def format_sse(self, event: dict[str, Any]) -> str:
         return f"data: {json.dumps(event)}\n\n"

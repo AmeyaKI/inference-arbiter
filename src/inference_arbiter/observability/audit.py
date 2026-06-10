@@ -31,3 +31,11 @@ class AuditStore:
 
     def get(self, request_id: str) -> dict[str, Any] | None:
         return self._records.get(request_id)
+
+    def all(self) -> list[dict[str, Any]]:
+        return list(self._records.values())
+
+    def clear(self) -> int:
+        count = len(self._records)
+        self._records.clear()
+        return count

@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from inference_arbiter.benchmark.runner import BenchmarkRunner
-from inference_arbiter.console.metrics_proxy import fetch_metrics_summary
+from inference_arbiter.console.metrics_proxy import fetch_metrics_summary, fetch_timeseries_data
 from inference_arbiter.observability.events import RoutingEventBus
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -34,6 +34,8 @@ def create_console_router(
     prometheus_url: str,
     get_audit_record,
     get_health,
+    get_all_audit_records=None,
+    clear_audit=None,
     bandit=None,
     bandit_checkpoint_path: str = "",
 ) -> APIRouter:
@@ -87,6 +89,10 @@ def create_console_router(
     async def console_metrics_summary():
         return await fetch_metrics_summary(prometheus_url)
 
+    @router.get("/console/api/metrics/timeseries")
+    async def console_metrics_timeseries():
+        return await fetch_timeseries_data(prometheus_url)
+
     @router.post("/console/api/benchmark/start")
     async def benchmark_start(body: BenchmarkStartRequest):
         return await benchmark_runner.start(
@@ -105,6 +111,17 @@ def create_console_router(
     @router.get("/console/api/benchmark/status")
     async def benchmark_status():
         return await benchmark_runner.status()
+
+    @router.get("/console/api/routing/all")
+    async def console_routing_all():
+        records = get_all_audit_records() if get_all_audit_records else []
+        return records
+
+    @router.post("/console/api/reset")
+    async def console_reset():
+        count = clear_audit() if clear_audit else 0
+        event_bus.clear()
+        return {"cleared_records": count}
 
     @router.get("/console/api/bandit/checkpoint")
     async def bandit_checkpoint():

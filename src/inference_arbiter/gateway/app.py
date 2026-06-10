@@ -375,6 +375,8 @@ def create_app() -> FastAPI:
             benchmark_runner=st.benchmark_runner,
             prometheus_url=st.settings.prometheus_url,
             get_audit_record=st.audit.get,
+            get_all_audit_records=st.audit.all,
+            clear_audit=st.audit.clear,
             get_health=console_health,
             bandit=st.bandit,
             bandit_checkpoint_path=st.settings.bandit_checkpoint_path,

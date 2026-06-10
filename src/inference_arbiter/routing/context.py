@@ -154,6 +154,7 @@ class RequestContext:
             "payload": {
                 "prompt_hash": self.payload.prompt_hash if self.payload else None,
                 "estimated_tokens": self.payload.estimated_tokens if self.payload else None,
+                "prompt_preview": self.payload.raw_prompt_preview if self.payload else None,
             },
             "bandit_scores": self.bandit_scores,
             "failure_attribution": (
