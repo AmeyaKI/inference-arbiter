@@ -162,23 +162,27 @@
             <input type="text" class="bench-label-input" id="bench-label" placeholder="m5-ollama-native" maxlength="120" />
           </div>
 
-          <div class="btn-row" id="bench-btn-row">
-            <button class="btn btn-primary" id="bench-start">
-              <i data-lucide="play" width="12" height="12"></i>
-              Start
-            </button>
-            <button class="btn btn-stop" id="bench-stop" disabled>
-              <i data-lucide="square" width="11" height="11"></i>
-              Stop
-            </button>
-            <button class="btn btn-reset" id="bench-reset" type="button" title="Clear session stats, feed, and comparison">
-              <i data-lucide="rotate-ccw" width="12" height="12"></i>
-              Reset
-            </button>
-            <button class="btn btn-save" id="bench-save" disabled title="Write benchmarks/latest.json to the repo">
-              <i data-lucide="save" width="12" height="12"></i>
-              Save
-            </button>
+          <div class="bench-btn-grid" id="bench-btn-row">
+            <div class="btn-row btn-row-primary">
+              <button class="btn btn-primary" id="bench-start">
+                <i data-lucide="play" width="12" height="12"></i>
+                Start
+              </button>
+              <button class="btn btn-stop" id="bench-stop" disabled>
+                <i data-lucide="square" width="11" height="11"></i>
+                Stop
+              </button>
+            </div>
+            <div class="btn-row btn-row-secondary">
+              <button class="btn btn-reset" id="bench-reset" type="button" title="Clear session stats, feed, and comparison">
+                <i data-lucide="rotate-ccw" width="12" height="12"></i>
+                Reset
+              </button>
+              <button class="btn btn-save" id="bench-save" disabled title="Write benchmarks/latest.json to the repo">
+                <i data-lucide="save" width="12" height="12"></i>
+                Save
+              </button>
+            </div>
           </div>
           <p id="bench-save-hint" class="scenario-hint hidden"></p>
 
