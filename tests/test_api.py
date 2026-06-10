@@ -93,7 +93,7 @@ async def test_chat_completions_mocked(app, monkeypatch):
         assert audit.status_code == 200
         body = audit.json()
         assert body["request_id"] == request_id
-        assert body["tier"] == resp.headers["X-Model-Tier"]
+        assert body["final_tier"] == resp.headers["X-Model-Tier"]
 
 
 @pytest.mark.asyncio

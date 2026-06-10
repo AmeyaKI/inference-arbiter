@@ -90,7 +90,8 @@ async def fetch_timeseries_data(prometheus_url: str) -> dict[str, Any]:
             prometheus_url, "sum(rate(requests_routed_total[30s]))"
         )
         fail_r = await _query_range(
-            prometheus_url, "rate(batch_shed_total[30s])"
+            prometheus_url,
+            "sum(rate(slo_breach_total[30s])) + sum(rate(batch_shed_total[30s]))",
         )
         p50_r = await _query_range(
             prometheus_url,

@@ -22,14 +22,21 @@ htmlcov/
 .env
 .env.*
 
-# Benchmark session archives (manual multi-scenario saves)
+# Benchmark archives (per-run dirs are ephemeral; latest.* is publishable)
 benchmarks/sessions/
+benchmarks/results/*
+!benchmarks/results/.gitkeep
 !benchmarks/latest.json
 !benchmarks/latest.md
+!benchmarks/results.md
 
 # Dev entry points (tracked)
 # scripts/arbiter — interactive control plane (also: arbiter console script in pyproject.toml)
 # scripts/dev.sh — stack bootstrap
+
+# Bandit checkpoint (local learning state)
+data/*
+!data/.gitkeep
 
 # local
 .archive/

@@ -65,6 +65,7 @@ class BenchmarkStats:
             "duration_s": self.duration_s,
             "max_requests": self.max_requests,
             "elapsed_s": round(elapsed, 2),
+            "run_started_at": self.started_at,
             "users": self.users,
             "spawn_rate": self.spawn_rate,
             "requests": self.requests,
@@ -93,6 +94,7 @@ class BenchmarkRunner:
         self._archive_hooks: BenchmarkArchiveHooks | None = None
         self._last_archive: dict[str, Any] | None = None
         self._archive_done = False
+        self._session_started_at: float | None = None
 
     def configure_archive(self, hooks: BenchmarkArchiveHooks) -> None:
         self._archive_hooks = hooks
@@ -104,6 +106,20 @@ class BenchmarkRunner:
     @property
     def last_archive(self) -> dict[str, Any] | None:
         return self._last_archive
+
+    @property
+    def session_started_at(self) -> float | None:
+        return self._session_started_at
+
+    @property
+    def baseline_model(self) -> str:
+        return self._baseline_model
+
+    def reset_session(self) -> None:
+        self._completed_runs.clear()
+        self._session_started_at = None
+        self._last_archive = None
+        self._baseline_model = "large"
 
     async def start(
         self,
@@ -123,17 +139,22 @@ class BenchmarkRunner:
         self._timeseries = []
         self._last_archive = None
         self._archive_done = False
+        started_at = time.time()
+        if self._session_started_at is None:
+            self._session_started_at = started_at
         self.stats = BenchmarkStats(
             scenario=scenario,
             running=True,
-            started_at=time.time(),
+            started_at=started_at,
             duration_s=duration_s,
             max_requests=max_requests,
             users=users,
             spawn_rate=spawn_rate,
         )
         self._task = asyncio.create_task(self._run(scenario, users, spawn_rate, duration_s, max_requests))
-        return self.stats.snapshot()
+        snap = self.stats.snapshot()
+        snap["baseline_model"] = self._baseline_model
+        return snap
 
     async def stop(self) -> dict[str, Any]:
         self._stop.set()
@@ -143,6 +164,7 @@ class BenchmarkRunner:
             except asyncio.TimeoutError:
                 self._task.cancel()
         snap = self.stats.snapshot()
+        snap["baseline_model"] = self._baseline_model
         if self.stats.scenario:
             self._completed_runs[self.stats.scenario] = snap
         if not self._archive_done and snap.get("requests", 0) > 0:
@@ -153,6 +175,7 @@ class BenchmarkRunner:
     def stop_nowait(self) -> dict[str, Any]:
         self._stop.set()
         snap = self.stats.snapshot()
+        snap["baseline_model"] = self._baseline_model
         if self.stats.scenario:
             self._completed_runs[self.stats.scenario] = snap
         return snap
@@ -161,6 +184,9 @@ class BenchmarkRunner:
         data = self.stats.snapshot()
         data["completed_runs"] = self._completed_runs
         data["last_archive"] = self._last_archive
+        data["timeseries"] = list(self._timeseries)
+        data["baseline_model"] = self._baseline_model
+        data["session_started_at"] = self._session_started_at
         return data
 
     async def _sample_timeseries(self, deadline: float) -> None:
@@ -218,6 +244,7 @@ class BenchmarkRunner:
                 except asyncio.CancelledError:
                     pass
             snap = self.stats.snapshot()
+            snap["baseline_model"] = self._baseline_model
             if self.stats.scenario:
                 self._completed_runs[self.stats.scenario] = snap
             await self._archive_run(snap, run_started_at)
@@ -241,7 +268,7 @@ class BenchmarkRunner:
                 self.stats.requests += 1
                 if len(self.stats.latencies_ms) < 5000:
                     self.stats.latencies_ms.append(latency_ms)
-                if resp.status_code >= 500:
+                if resp.status_code >= 400:
                     self.stats.failures += 1
             except Exception:
                 self.stats.requests += 1
@@ -302,5 +329,9 @@ class BenchmarkRunner:
                 completed_runs=dict(self._completed_runs),
                 tier_weights=hooks.tier_weights or None,
             )
-        except Exception:
-            self._last_archive = {"error": "archive_failed", "scenario": snap.get("scenario")}
+        except Exception as exc:
+            self._last_archive = {
+                "error": "archive_failed",
+                "detail": str(exc),
+                "scenario": snap.get("scenario"),
+            }

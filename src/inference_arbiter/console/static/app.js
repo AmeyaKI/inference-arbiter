@@ -34,9 +34,14 @@ let lastAuditData = null;
 let activeAuditTab = "summary";
 let benchMode = "duration";
 let lastCompletedRunsKey = "";
+let benchHasRunnerTs = false;
+let chartsFrozen = false;
+let frozenBenchTimeseries = null;
+let benchmarkWasRunning = false;
 const charts = {};
 
 const rdiagCounts = { small: 0, medium: 0, large: 0 };
+const seenFeedIds = new Set();
 
 // ── helpers ──────────────────────────────────────────────────
 
@@ -121,10 +126,17 @@ function switchTab(tabName) {
   document.querySelectorAll(".panel").forEach((p) => p.classList.remove("active"));
   const panel = document.getElementById(`panel-${tabName}`);
   if (panel) panel.classList.add("active");
-  if (tabName === "benchmark") startBenchChartsPoll();
-  else stopBenchChartsPoll();
-  if (tabName === "metrics") startMetricsPoll();
-  else stopMetricsPoll();
+  if (tabName === "benchmark") {
+    if (!chartsFrozen) startBenchChartsPoll();
+    else stopBenchChartsPoll();
+  } else {
+    stopBenchChartsPoll();
+  }
+  if (tabName === "metrics") {
+    if (!chartsFrozen) startMetricsPoll();
+  } else {
+    stopMetricsPoll();
+  }
 }
 
 document.querySelectorAll(".tab").forEach((tab) => {
@@ -296,6 +308,11 @@ function connectSSE() {
 }
 
 function addFeedRow(event) {
+  const rid = event.request_id;
+  if (rid) {
+    if (seenFeedIds.has(rid)) return;
+    seenFeedIds.add(rid);
+  }
   if (feedEmpty) feedEmpty.classList.add("hidden");
 
   const tier = (event.final_tier || "unknown").toLowerCase();
@@ -308,8 +325,9 @@ function addFeedRow(event) {
 
   const row = document.createElement("div");
   row.className = "feed-row entering";
-  const responseLine = event.response_preview
-    ? `<div class="feed-response">${esc(event.response_preview)}</div>`
+  const responseBody = event.response_text || event.response_preview;
+  const responseLine = responseBody
+    ? `<div class="feed-response">${esc(responseBody)}</div>`
     : "";
   row.innerHTML = `
     <div class="tier-cell">${tierPill(tier)}</div>
@@ -523,6 +541,7 @@ document.getElementById("audit-copy").addEventListener("click", () => {
 
 document.getElementById("bench-start").addEventListener("click", startBench);
 document.getElementById("bench-stop").addEventListener("click", stopBench);
+document.getElementById("bench-reset").addEventListener("click", resetBench);
 document.getElementById("bench-save").addEventListener("click", saveBenchSession);
 const benchStartEmpty = document.getElementById("bench-start-empty");
 if (benchStartEmpty) benchStartEmpty.addEventListener("click", startBench);
@@ -539,9 +558,14 @@ async function startBench() {
   benchDuration = durationS;
   benchUsers = users;
   benchSpawnRate = spawnRate;
+  benchHasRunnerTs = false;
+  chartsFrozen = false;
+  frozenBenchTimeseries = null;
+  benchmarkWasRunning = true;
 
   document.getElementById("bench-start").disabled = true;
   document.getElementById("bench-stop").disabled = false;
+  document.getElementById("bench-reset").disabled = true;
   document.getElementById("bench-btn-row").classList.add("btn-running");
   document.getElementById("stat-elapsed").textContent = "0:00";
 
@@ -549,7 +573,8 @@ async function startBench() {
   rampWrap.classList.remove("hidden");
   document.getElementById("ramp-label").textContent = `Spawning ${users} workers at ${spawnRate}/s…`;
 
-  if (!charts["chart-ts-rps"]) initTsCharts();
+  destroyBenchTsCharts();
+  initTsCharts();
   startBenchChartsPoll();
 
   const label = document.getElementById("bench-label")?.value?.trim() || "";
@@ -570,19 +595,108 @@ async function startBench() {
   });
 
   benchPollTimer = setInterval(pollBench, 1000);
+
+  const metricsPanel = document.getElementById("panel-metrics");
+  if (metricsPanel?.classList.contains("active")) {
+    startMetricsPoll();
+  }
 }
 
 async function stopBench() {
-  await fetch("/console/api/benchmark/stop", { method: "POST" });
   clearInterval(benchPollTimer);
   benchPollTimer = null;
+  stopBenchChartsPoll();
+  stopMetricsPoll();
+
+  let data = {};
+  try {
+    const resp = await fetch("/console/api/benchmark/stop", { method: "POST" });
+    data = await resp.json();
+  } catch (_) {
+    try {
+      data = await fetch("/console/api/benchmark/status").then((r) => r.json());
+    } catch (e) {
+      data = {};
+    }
+  }
+
   benchStartTime = null;
   document.getElementById("bench-start").disabled = false;
   document.getElementById("bench-stop").disabled = true;
+  document.getElementById("bench-reset").disabled = false;
   document.getElementById("bench-btn-row").classList.remove("btn-running");
   document.getElementById("ramp-wrap").classList.add("hidden");
   document.getElementById("stat-elapsed").textContent = "—";
-  pollBench();
+
+  if (data.timeseries?.length) {
+    frozenBenchTimeseries = data.timeseries;
+    benchHasRunnerTs = true;
+    renderRunnerTimeseries(frozenBenchTimeseries);
+  }
+  chartsFrozen = true;
+
+  applyBenchStatus(data);
+  handleBenchComplete(data);
+}
+
+async function resetBench() {
+  if (benchPollTimer) {
+    clearInterval(benchPollTimer);
+    benchPollTimer = null;
+  }
+  stopBenchChartsPoll();
+  chartsFrozen = false;
+  frozenBenchTimeseries = null;
+  benchHasRunnerTs = false;
+  benchmarkWasRunning = false;
+  benchStartTime = null;
+  lastCompletedRunsKey = "";
+
+  try {
+    await fetch("/console/api/reset", { method: "POST" });
+  } catch (_) {}
+
+  seenFeedIds.clear();
+  if (liveFeed) {
+    liveFeed.querySelectorAll(".feed-row").forEach((row) => row.remove());
+    if (feedEmpty) feedEmpty.classList.remove("hidden");
+  }
+  rdiagCounts.small = 0;
+  rdiagCounts.medium = 0;
+  rdiagCounts.large = 0;
+  ["small", "medium", "large"].forEach((t) => {
+    const el = document.getElementById(`rdiag-count-${t}`);
+    if (el) el.textContent = "0";
+  });
+
+  destroyBenchTsCharts();
+  ["stat-requests", "stat-rps", "stat-failures", "stat-p50", "stat-p95", "stat-elapsed"].forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) {
+      el.textContent = "—";
+      if (id.startsWith("stat-p")) el.className = "stat-value";
+    }
+  });
+
+  document.getElementById("bench-start").disabled = false;
+  document.getElementById("bench-stop").disabled = true;
+  document.getElementById("bench-reset").disabled = false;
+  document.getElementById("bench-save").disabled = true;
+  document.getElementById("bench-btn-row").classList.remove("btn-running");
+  document.getElementById("ramp-wrap").classList.add("hidden");
+  document.getElementById("compare-card")?.classList.add("hidden");
+  document.getElementById("bench-badge")?.classList.add("hidden");
+  const hint = document.getElementById("bench-save-hint");
+  if (hint) {
+    hint.textContent = "";
+    hint.classList.add("hidden");
+  }
+
+  const metricsPanel = document.getElementById("panel-metrics");
+  if (metricsPanel?.classList.contains("active")) {
+    startMetricsPoll();
+  }
+  showToast("Session reset");
 }
 
 function setStatLatency(id, ms) {
@@ -592,67 +706,92 @@ function setStatLatency(id, ms) {
   el.className = `stat-value ${latCls(ms)}`;
 }
 
+function applyBenchStatus(data) {
+  document.getElementById("stat-requests").textContent = data.requests ?? "—";
+  document.getElementById("stat-rps").textContent =
+    typeof data.rps === "number" ? data.rps.toFixed(1) : "—";
+  document.getElementById("stat-failures").textContent = data.failures ?? "—";
+  setStatLatency("stat-p50", data.p50_ms);
+  setStatLatency("stat-p95", data.p95_ms);
+
+  if (!chartsFrozen && data.timeseries?.length) {
+    benchHasRunnerTs = true;
+    renderRunnerTimeseries(data.timeseries);
+    const tsBanner = document.getElementById("bench-ts-banner");
+    if (tsBanner) tsBanner.classList.add("hidden");
+  }
+
+  if (benchStartTime && data.running) {
+    const elapsed = (Date.now() - benchStartTime) / 1000;
+    const mins = Math.floor(elapsed / 60);
+    const secs = Math.floor(elapsed % 60);
+    document.getElementById("stat-elapsed").textContent =
+      `${mins}:${String(secs).padStart(2, "0")}`;
+
+    const rampSec = Math.ceil(benchUsers / benchSpawnRate);
+    const rampWrap = document.getElementById("ramp-wrap");
+    if (elapsed < rampSec) {
+      rampWrap.classList.remove("hidden");
+      const p = Math.min(elapsed / rampSec, 1);
+      document.getElementById("ramp-fill").style.width = `${p * 100}%`;
+      document.getElementById("ramp-label").textContent =
+        `Ramping up… ${Math.round(p * benchUsers)}/${benchUsers} workers`;
+    } else {
+      rampWrap.classList.add("hidden");
+    }
+  }
+
+  const runs = data.completed_runs || {};
+  const key = JSON.stringify(runs);
+  if (key !== lastCompletedRunsKey) {
+    lastCompletedRunsKey = key;
+    renderComparison(runs);
+  }
+  const saveBtn = document.getElementById("bench-save");
+  if (saveBtn) {
+    saveBtn.disabled = data.running || Object.keys(runs).length === 0;
+  }
+}
+
+function handleBenchComplete(data) {
+  if (data.last_archive?.run_dir) {
+    showToast(`Auto-saved → ${data.last_archive.run_dir}`);
+    const hint = document.getElementById("bench-save-hint");
+    if (hint) {
+      hint.textContent = `Auto-saved to ${data.last_archive.run_dir}`;
+      hint.classList.remove("hidden");
+    }
+  } else if (data.last_archive?.error) {
+    showToast(`Archive failed: ${data.last_archive.detail || data.last_archive.error}`);
+  } else if ((data.requests || 0) > 0) {
+    showToast("Benchmark complete");
+  }
+}
+
 async function pollBench() {
   try {
     const data = await fetch("/console/api/benchmark/status").then((r) => r.json());
-
-    document.getElementById("stat-requests").textContent = data.requests ?? "—";
-    document.getElementById("stat-rps").textContent =
-      typeof data.rps === "number" ? data.rps.toFixed(1) : "—";
-    document.getElementById("stat-failures").textContent = data.failures ?? "—";
-    setStatLatency("stat-p50", data.p50_ms);
-    setStatLatency("stat-p95", data.p95_ms);
-
-    if (benchStartTime && data.running) {
-      const elapsed = (Date.now() - benchStartTime) / 1000;
-      const mins = Math.floor(elapsed / 60);
-      const secs = Math.floor(elapsed % 60);
-      document.getElementById("stat-elapsed").textContent =
-        `${mins}:${String(secs).padStart(2, "0")}`;
-
-      const rampSec = Math.ceil(benchUsers / benchSpawnRate);
-      const rampWrap = document.getElementById("ramp-wrap");
-      if (elapsed < rampSec) {
-        rampWrap.classList.remove("hidden");
-        const p = Math.min(elapsed / rampSec, 1);
-        document.getElementById("ramp-fill").style.width = `${p * 100}%`;
-        document.getElementById("ramp-label").textContent =
-          `Ramping up… ${Math.round(p * benchUsers)}/${benchUsers} workers`;
-      } else {
-        rampWrap.classList.add("hidden");
-      }
-    }
+    applyBenchStatus(data);
 
     if (!data.running && benchPollTimer) {
+      clearInterval(benchPollTimer);
+      benchPollTimer = null;
+      stopBenchChartsPoll();
+      stopMetricsPoll();
+      benchStartTime = null;
       document.getElementById("bench-start").disabled = false;
       document.getElementById("bench-stop").disabled = true;
+      document.getElementById("bench-reset").disabled = false;
       document.getElementById("bench-btn-row").classList.remove("btn-running");
       document.getElementById("ramp-wrap").classList.add("hidden");
       document.getElementById("stat-elapsed").textContent = "—";
-      clearInterval(benchPollTimer);
-      benchPollTimer = null;
-      benchStartTime = null;
-      if (data.last_archive?.run_dir) {
-        showToast(`Saved → ${data.last_archive.run_dir}`);
-        const hint = document.getElementById("bench-save-hint");
-        if (hint) {
-          hint.textContent = `Auto-saved to ${data.last_archive.run_dir}`;
-          hint.classList.remove("hidden");
-        }
-      } else {
-        showToast("Benchmark complete");
+      if (data.timeseries?.length) {
+        frozenBenchTimeseries = data.timeseries;
+        benchHasRunnerTs = true;
+        renderRunnerTimeseries(frozenBenchTimeseries);
       }
-    }
-
-    const runs = data.completed_runs || {};
-    const key = JSON.stringify(runs);
-    if (key !== lastCompletedRunsKey) {
-      lastCompletedRunsKey = key;
-      renderComparison(runs);
-    }
-    const saveBtn = document.getElementById("bench-save");
-    if (saveBtn) {
-      saveBtn.disabled = data.running || Object.keys(runs).length === 0;
+      chartsFrozen = true;
+      handleBenchComplete(data);
     }
   } catch (_) {}
 }
@@ -706,11 +845,13 @@ function renderComparison(runs) {
   card.classList.remove("hidden");
   badge.classList.remove("hidden");
 
-  function deltaTag(d, goodWhenPositive = false) {
+  function deltaTag(d, metric = "latency") {
     if (d == null) return "";
-    const good = goodWhenPositive ? d > 0 : d > 0;
+    const good = d > 0;
     const cls = good ? "delta-good" : d === 0 ? "delta-flat" : "delta-bad";
-    const sign = d > 0 ? "−" : d < 0 ? "+" : "";
+    const sign = metric === "rps"
+      ? (d > 0 ? "+" : d < 0 ? "−" : "")
+      : (d > 0 ? "−" : d < 0 ? "+" : "");
     return `<span class="delta ${cls}">${sign}${Math.abs(d)}%</span>`;
   }
 
@@ -745,8 +886,8 @@ function renderComparison(runs) {
           ${compareBar(p95d, p95d > 0)}
         </div>
         <div class="compare-row">
-          <div class="compare-row-val">${arbiter.rps} rps ${rpsd != null ? deltaTag(-rpsd, true) : ""}</div>
-          ${rpsd != null ? compareBar(-rpsd, rpsd > 0) : ""}
+          <div class="compare-row-val">${arbiter.rps} rps ${rpsd != null ? deltaTag(rpsd, "rps") : ""}</div>
+          ${rpsd != null ? compareBar(rpsd, rpsd > 0) : ""}
         </div>
       </div>
     `;
@@ -769,7 +910,7 @@ function renderComparison(runs) {
 // ── metrics tab ──────────────────────────────────────────────
 
 function startBenchChartsPoll() {
-  requestAnimationFrame(() => pollTimeseries());
+  if (chartsFrozen) return;
   if (!benchTsPollTimer) {
     benchTsPollTimer = setInterval(pollTimeseries, 10000);
   }
@@ -781,8 +922,11 @@ function stopBenchChartsPoll() {
 }
 
 function startMetricsPoll() {
+  if (chartsFrozen) return;
   requestAnimationFrame(() => pollMetrics());
-  metricsPollTimer = setInterval(pollMetrics, 5000);
+  if (!metricsPollTimer) {
+    metricsPollTimer = setInterval(pollMetrics, 5000);
+  }
 }
 
 function stopMetricsPoll() {
@@ -801,6 +945,7 @@ function updateKpiRing(elId, valId, pct, color) {
 }
 
 async function pollMetrics() {
+  if (chartsFrozen) return;
   const banner = document.getElementById("metrics-banner");
   try {
     const data = await fetch("/console/api/metrics/summary").then((r) => r.json());
@@ -996,7 +1141,31 @@ function fmtEpochMs(ms) {
   return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
 
-function makeTsChart(id, datasets) {
+function downsampleSeries(ts, maxPoints = 90) {
+  if (!ts?.length || ts.length <= maxPoints) return ts || [];
+  const step = Math.ceil(ts.length / maxPoints);
+  const out = [];
+  for (let i = 0; i < ts.length; i += step) out.push(ts[i]);
+  if (out[out.length - 1] !== ts[ts.length - 1]) out.push(ts[ts.length - 1]);
+  return out;
+}
+
+function fmtChartMs(value) {
+  if (value == null) return "";
+  if (value >= 1000) return `${(value / 1000).toFixed(1)}s`;
+  return `${Math.round(value)}`;
+}
+
+function destroyBenchTsCharts() {
+  ["chart-ts-rps", "chart-ts-latency"].forEach((id) => {
+    if (charts[id]) {
+      charts[id].destroy();
+      charts[id] = null;
+    }
+  });
+}
+
+function makeTsChart(id, datasets, yTickFmt) {
   const ctx = document.getElementById(id);
   if (!ctx) return null;
   if (charts[id]) { charts[id].destroy(); charts[id] = null; }
@@ -1008,21 +1177,38 @@ function makeTsChart(id, datasets) {
       maintainAspectRatio: false,
       animation: false,
       interaction: { mode: "index", intersect: false },
-      plugins: { legend: { display: false } },
+      layout: { padding: { top: 12, right: 16, bottom: 4, left: 4 } },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: "#1a1917",
+          titleFont: { family: CHART_THEME.font, size: 11 },
+          bodyFont: { family: CHART_THEME.font, size: 11 },
+          padding: 10,
+          cornerRadius: 6,
+        },
+      },
       scales: {
         x: {
           ticks: {
             color: CHART_THEME.ticks,
-            font: { family: CHART_THEME.font, size: 10 },
-            maxTicksLimit: 8,
+            font: { family: CHART_THEME.font, size: 11 },
+            maxTicksLimit: 7,
             maxRotation: 0,
+            autoSkip: true,
           },
-          grid: { display: false },
+          grid: { color: CHART_THEME.grid, drawTicks: false },
         },
         y: {
           beginAtZero: true,
-          grid: { color: CHART_THEME.grid },
-          ticks: { color: CHART_THEME.ticks, font: { family: CHART_THEME.font, size: 10 } },
+          grace: "8%",
+          grid: { color: CHART_THEME.grid, drawTicks: false },
+          ticks: {
+            color: CHART_THEME.ticks,
+            font: { family: CHART_THEME.font, size: 11 },
+            maxTicksLimit: 6,
+            callback: yTickFmt || ((v) => v),
+          },
         },
       },
     },
@@ -1031,15 +1217,15 @@ function makeTsChart(id, datasets) {
 
 function initTsCharts() {
   charts["chart-ts-rps"] = makeTsChart("chart-ts-rps", [
-    { label: "RPS",        data: [], borderColor: "#2e7d4f", backgroundColor: "rgba(46,125,79,0.08)", fill: true, tension: 0.3, pointRadius: 3, borderWidth: 2 },
-    { label: "Failures/s", data: [], borderColor: "#c03050", backgroundColor: "rgba(192,48,80,0.06)", fill: false, tension: 0.3, pointRadius: 3, borderWidth: 1.5, borderDash: [4,3] },
+    { label: "RPS", data: [], borderColor: "#2e7d4f", backgroundColor: "rgba(46,125,79,0.12)", fill: true, tension: 0.35, pointRadius: 0, pointHoverRadius: 4, borderWidth: 2.5 },
+    { label: "Fail rate", data: [], borderColor: "#c03050", backgroundColor: "rgba(192,48,80,0.06)", fill: false, tension: 0.35, pointRadius: 0, pointHoverRadius: 4, borderWidth: 2, borderDash: [5, 4] },
   ]);
   charts["chart-ts-latency"] = makeTsChart("chart-ts-latency", [
-    { label: "P50 ms", data: [], borderColor: "#d4522a", backgroundColor: "rgba(212,82,42,0.08)", fill: true,  tension: 0.3, pointRadius: 3, borderWidth: 2 },
-    { label: "P95 ms", data: [], borderColor: "#7c3aed", backgroundColor: "rgba(124,58,237,0.06)", fill: false, tension: 0.3, pointRadius: 3, borderWidth: 1.5 },
-  ]);
+    { label: "P50", data: [], borderColor: "#d4522a", backgroundColor: "rgba(212,82,42,0.10)", fill: true, tension: 0.35, pointRadius: 0, pointHoverRadius: 4, borderWidth: 2.5 },
+    { label: "P95", data: [], borderColor: "#7c3aed", backgroundColor: "rgba(124,58,237,0.06)", fill: false, tension: 0.35, pointRadius: 0, pointHoverRadius: 4, borderWidth: 2, borderDash: [5, 4] },
+  ], fmtChartMs);
   charts["chart-ts-inflight"] = makeTsChart("chart-ts-inflight", [
-    { label: "In-flight", data: [], borderColor: "#0070f3", backgroundColor: "rgba(0,112,243,0.08)", fill: true, tension: 0.3, pointRadius: 3, borderWidth: 2 },
+    { label: "In-flight", data: [], borderColor: "#0070f3", backgroundColor: "rgba(0,112,243,0.10)", fill: true, tension: 0.35, pointRadius: 0, pointHoverRadius: 4, borderWidth: 2.5 },
   ]);
 }
 
@@ -1053,7 +1239,30 @@ function updateTsChart(id, labels, ...seriesValues) {
   c.update("none");
 }
 
+function renderRunnerTimeseries(ts) {
+  if (!ts?.length) return;
+  if (!charts["chart-ts-rps"]) initTsCharts();
+
+  const sampled = downsampleSeries(ts);
+  const labels = sampled.map((p) => {
+    const mins = Math.floor(p.elapsed_s / 60);
+    const secs = Math.floor(p.elapsed_s % 60);
+    return `${mins}:${String(secs).padStart(2, "0")}`;
+  });
+  const failRates = sampled.map((p, i) => {
+    if (i === 0) return 0;
+    const prev = sampled[i - 1];
+    const dt = p.elapsed_s - prev.elapsed_s;
+    const df = p.failures - prev.failures;
+    return dt > 0 ? +(df / dt).toFixed(2) : 0;
+  });
+
+  updateTsChart("chart-ts-rps", labels, sampled.map((p) => p.rps), failRates);
+  updateTsChart("chart-ts-latency", labels, sampled.map((p) => p.p50_ms), sampled.map((p) => p.p95_ms));
+}
+
 async function pollTimeseries() {
+  if (chartsFrozen || benchHasRunnerTs) return;
   const banner = document.getElementById("bench-ts-banner");
   try {
     const data = await fetch("/console/api/metrics/timeseries").then((r) => r.json());
@@ -1181,6 +1390,15 @@ document.getElementById("custom-audit-btn").addEventListener("click", () => {
 
 // ── init ──────────────────────────────────────────────────────
 
+async function preloadFeed() {
+  try {
+    const events = await fetch("/console/api/events/snapshot").then((r) => r.json());
+    if (!Array.isArray(events) || events.length === 0) return;
+    [...events].reverse().forEach((ev) => addFeedRow(ev));
+  } catch (_) {}
+}
+
+preloadFeed();
 connectSSE();
-startBenchChartsPoll();
+pollBench();
 lucide.createIcons();

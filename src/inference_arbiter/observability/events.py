@@ -29,6 +29,7 @@ def build_routing_event(
         "timestamp": time.time(),
         "requested_model": ctx.requested_model,
         "prompt_preview": preview,
+        "response_text": ctx.response_text,
         "response_preview": ctx.response_preview,
         "final_tier": ctx.final_tier,
         "tiers_attempted": ctx.tiers_attempted,
@@ -69,6 +70,9 @@ class RoutingEventBus:
         queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue(maxsize=100)
         async with self._lock:
             self._subscribers.append(queue)
+            replay = list(self._buffer)
+        for event in replay:
+            yield event
         try:
             while True:
                 event = await queue.get()

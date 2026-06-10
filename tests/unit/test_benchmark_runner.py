@@ -29,6 +29,15 @@ def test_build_payload_scenarios():
     assert arbiter["model"] == "auto"
 
 
+def test_reset_session_clears_completed_runs():
+    runner = BenchmarkRunner()
+    runner._completed_runs["baseline"] = {"scenario": "baseline"}
+    runner._session_started_at = 100.0
+    runner.reset_session()
+    assert runner.completed_runs == {}
+    assert runner.session_started_at is None
+
+
 @pytest.mark.asyncio
 async def test_benchmark_start_stop_without_server():
     runner = BenchmarkRunner(base_url="http://127.0.0.1:1")
@@ -39,3 +48,5 @@ async def test_benchmark_start_stop_without_server():
     final = await runner.status()
     assert final["running"] is False
     assert "baseline" in final["completed_runs"]
+    assert runner.session_started_at is not None
+    assert "timeseries" in final

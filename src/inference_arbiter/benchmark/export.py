@@ -75,6 +75,13 @@ def tier_distribution(
     return {tier: round(count / total, 4) for tier, count in sorted(counts.items())}
 
 
+def baseline_tier_distribution(baseline_model: str = "large") -> dict[str, float]:
+    tier = (baseline_model or "large").strip().lower()
+    if tier not in DEFAULT_TIER_WEIGHTS:
+        tier = "large"
+    return {tier: 1.0}
+
+
 def cost_proxy(
     distribution: dict[str, float],
     tier_weights: dict[str, float] | None = None,
@@ -167,7 +174,7 @@ def build_run_archive_payload(
 
     run_tiers = tier_distribution(audit_records)
     arbiter_tiers = tier_distribution(audit_records, requested_model="auto")
-    baseline_cost = cost_proxy({"large": 1.0}, weights)
+    baseline_cost = cost_proxy(baseline_tier_distribution(baseline_model), weights)
     arbiter_cost = cost_proxy(arbiter_tiers, weights)
     cost_reduction_pct = None
     if baseline_cost and arbiter_cost is not None and baseline_cost > 0:
@@ -197,7 +204,8 @@ def build_run_archive_payload(
             "arbiter_auto": arbiter_tiers,
         },
         "cost_proxy": {
-            "baseline_all_large": baseline_cost,
+            "baseline_model": baseline_model,
+            "baseline_weighted": baseline_cost,
             "arbiter_weighted": arbiter_cost,
             "reduction_pct": cost_reduction_pct,
             "tier_weights": weights,
@@ -355,14 +363,17 @@ def build_session_payload(
     label: str = "",
     audit_records: list[dict[str, Any]] | None = None,
     tier_weights: dict[str, float] | None = None,
+    baseline_model: str = "large",
 ) -> dict[str, Any]:
     saved_at = datetime.now(timezone.utc).isoformat()
     audit_records = audit_records or []
     weights = tier_weights or DEFAULT_TIER_WEIGHTS
+    baseline_run = completed_runs.get("baseline") or {}
+    baseline_model = baseline_run.get("baseline_model") or baseline_model
 
     arbiter_tiers = tier_distribution(audit_records, requested_model="auto")
     session_tiers = tier_distribution(audit_records)
-    baseline_cost = cost_proxy({"large": 1.0}, weights)
+    baseline_cost = cost_proxy(baseline_tier_distribution(baseline_model), weights)
     arbiter_cost = cost_proxy(arbiter_tiers, weights)
 
     cost_reduction_pct = None
@@ -388,7 +399,8 @@ def build_session_payload(
             "arbiter_auto": arbiter_tiers,
         },
         "cost_proxy": {
-            "baseline_all_large": baseline_cost,
+            "baseline_model": baseline_model,
+            "baseline_weighted": baseline_cost,
             "arbiter_weighted": arbiter_cost,
             "reduction_pct": cost_reduction_pct,
             "tier_weights": weights,
@@ -436,9 +448,10 @@ def render_markdown(payload: dict[str, Any]) -> str:
             parts = [f"{tier} {pct * 100:.1f}%" for tier, pct in sorted(tiers.items())]
             lines.append("- " + ", ".join(parts))
         if cost.get("arbiter_weighted") is not None:
+            baseline_label = cost.get("baseline_model", "large")
             lines.append(
                 f"- Cost proxy (weighted): **{cost['arbiter_weighted']}** "
-                f"vs baseline **{cost.get('baseline_all_large')}**"
+                f"vs baseline ({baseline_label}) **{cost.get('baseline_weighted')}**"
             )
         if cost.get("reduction_pct") is not None:
             lines.append(f"- Estimated cost reduction: **{cost['reduction_pct']}%**")
@@ -452,16 +465,20 @@ def save_benchmark_session(
     *,
     label: str = "",
     audit_records: list[dict[str, Any]] | None = None,
+    audit_since: float = 0.0,
     tier_weights: dict[str, float] | None = None,
+    baseline_model: str = "large",
 ) -> dict[str, Any]:
     if not completed_runs:
         raise ValueError("no completed benchmark runs to save")
 
+    scoped_audit = filter_since(audit_records or [], audit_since)
     payload = build_session_payload(
         completed_runs,
         label=label,
-        audit_records=audit_records,
+        audit_records=scoped_audit,
         tier_weights=tier_weights,
+        baseline_model=baseline_model,
     )
     markdown = render_markdown(payload)
 

@@ -63,6 +63,10 @@ def create_console_router(
     async def console_health():
         return await get_health()
 
+    @router.get("/console/api/events/snapshot")
+    async def console_events_snapshot():
+        return event_bus.snapshot()
+
     @router.get("/console/api/events")
     async def console_events(request: Request):
         async def event_stream():
@@ -114,7 +118,8 @@ def create_console_router(
 
     @router.post("/console/api/benchmark/stop")
     async def benchmark_stop():
-        return await benchmark_runner.stop()
+        await benchmark_runner.stop()
+        return await benchmark_runner.status()
 
     @router.get("/console/api/benchmark/status")
     async def benchmark_status():
@@ -126,12 +131,15 @@ def create_console_router(
         if not completed:
             raise HTTPException(status_code=400, detail="no completed benchmark runs to save")
         audit_records = get_all_audit_records() if get_all_audit_records else []
+        audit_since = benchmark_runner.session_started_at or 0.0
         try:
             result = save_benchmark_session(
                 completed,
                 label=body.label,
                 audit_records=audit_records,
+                audit_since=audit_since,
                 tier_weights=tier_weights,
+                baseline_model=benchmark_runner.baseline_model,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -146,6 +154,7 @@ def create_console_router(
     async def console_reset():
         count = clear_audit() if clear_audit else 0
         event_bus.clear()
+        benchmark_runner.reset_session()
         return {"cleared_records": count}
 
     @router.get("/console/api/bandit/checkpoint")

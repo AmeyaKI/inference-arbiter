@@ -97,6 +97,17 @@ def test_save_benchmark_session_writes_latest(tmp_path, monkeypatch):
     assert "baseline vs arbiter" in render_markdown(payload).lower()
 
 
+def test_save_benchmark_session_filters_audit_since():
+    runs = {"baseline": _run("baseline", baseline_model="medium")}
+    audit = [
+        {"timestamp": 50.0, "requested_model": "auto", "final_tier": "small"},
+        {"timestamp": 150.0, "requested_model": "auto", "final_tier": "medium"},
+    ]
+    payload = build_session_payload(runs, audit_records=filter_since(audit, 100.0))
+    assert payload["tier_distribution"]["arbiter_auto"] == {"medium": 1.0}
+    assert payload["cost_proxy"]["baseline_model"] == "medium"
+
+
 def test_save_benchmark_session_requires_runs():
     with pytest.raises(ValueError, match="no completed"):
         save_benchmark_session({})

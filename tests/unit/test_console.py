@@ -18,6 +18,14 @@ def _transport(app):
 
 
 @pytest.mark.asyncio
+async def test_events_snapshot(app):
+    async with AsyncClient(transport=_transport(app), base_url="http://test") as client:
+        resp = await client.get("/console/api/events/snapshot")
+    assert resp.status_code == 200
+    assert isinstance(resp.json(), list)
+
+
+@pytest.mark.asyncio
 async def test_console_index(app):
     async with AsyncClient(transport=_transport(app), base_url="http://test") as client:
         resp = await client.get("/console")
@@ -47,6 +55,29 @@ async def test_benchmark_save_without_runs(app):
     async with AsyncClient(transport=_transport(app), base_url="http://test") as client:
         resp = await client.post("/console/api/benchmark/save", json={"label": "x"})
     assert resp.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_benchmark_stop_returns_status(app, monkeypatch):
+    runner = app.state.arbiter.benchmark_runner
+    runner._completed_runs = {
+        "baseline": {"scenario": "baseline", "requests": 5, "p50_ms": 100},
+    }
+    runner._last_archive = {"run_dir": "benchmarks/results/baseline_test"}
+    runner.stats.running = False
+
+    async def fake_stop():
+        runner.stats.running = False
+        return runner.stats.snapshot()
+
+    runner.stop = fake_stop
+
+    async with AsyncClient(transport=_transport(app), base_url="http://test") as client:
+        resp = await client.post("/console/api/benchmark/stop")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "completed_runs" in data
+    assert data["last_archive"]["run_dir"] == "benchmarks/results/baseline_test"
 
 
 @pytest.mark.asyncio

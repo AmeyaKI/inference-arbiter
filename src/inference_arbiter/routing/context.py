@@ -87,9 +87,6 @@ class RequestContext:
     shadow_would_route_to: str | None = None
     response_text: str | None = None
 
-    _RESPONSE_AUDIT_MAX_LEN = 4096
-    _RESPONSE_PREVIEW_LEN = 200
-
     @classmethod
     def create(
         cls,
@@ -128,18 +125,11 @@ class RequestContext:
         if not text:
             self.response_text = None
             return
-        trimmed = text.strip()
-        if len(trimmed) > self._RESPONSE_AUDIT_MAX_LEN:
-            trimmed = trimmed[: self._RESPONSE_AUDIT_MAX_LEN] + "..."
-        self.response_text = trimmed
+        self.response_text = text.strip()
 
     @property
     def response_preview(self) -> str | None:
-        if not self.response_text:
-            return None
-        if len(self.response_text) <= self._RESPONSE_PREVIEW_LEN:
-            return self.response_text
-        return self.response_text[: self._RESPONSE_PREVIEW_LEN] + "..."
+        return self.response_text
 
     def to_dict(self) -> dict[str, Any]:
         return {
