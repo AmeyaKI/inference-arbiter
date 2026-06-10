@@ -29,6 +29,7 @@ def build_routing_event(
         "timestamp": time.time(),
         "requested_model": ctx.requested_model,
         "prompt_preview": preview,
+        "response_preview": ctx.response_preview,
         "final_tier": ctx.final_tier,
         "tiers_attempted": ctx.tiers_attempted,
         "routing_reason": ctx.routing_reason,
@@ -87,6 +88,9 @@ class RoutingEventBus:
 
     def clear(self) -> None:
         self._buffer.clear()
+
+    def snapshot(self) -> list[dict[str, Any]]:
+        return list(self._buffer)
 
     def format_sse(self, event: dict[str, Any]) -> str:
         return f"data: {json.dumps(event)}\n\n"

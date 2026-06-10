@@ -13,7 +13,8 @@ from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from inference_arbiter.config import build_default_endpoints, get_settings
-from inference_arbiter.benchmark.runner import BenchmarkRunner
+from inference_arbiter.benchmark.runner import BenchmarkArchiveHooks, BenchmarkRunner
+from inference_arbiter.console.metrics_proxy import fetch_metrics_summary, fetch_timeseries_data
 from inference_arbiter.console.routes import create_console_router
 from inference_arbiter.endpoints.client import BackendClient
 from inference_arbiter.gateway.models import ChatCompletionRequest, ModelCard, ModelListResponse
@@ -99,6 +100,17 @@ async def lifespan(app: FastAPI):
         except Exception as exc:
             logger.warning("bandit_checkpoint_load_failed", path=checkpoint, error=str(exc))
     await state.bandit_updater.start()
+    tier_weights = {ep.tier.value: ep.tier_weight for ep in state.endpoints}
+    prom_url = state.settings.prometheus_url
+    state.benchmark_runner.configure_archive(
+        BenchmarkArchiveHooks(
+            get_audit_records=state.audit.all,
+            get_live_events=state.event_bus.snapshot,
+            fetch_metrics_summary=lambda: fetch_metrics_summary(prom_url),
+            fetch_metrics_timeseries=lambda: fetch_metrics_timeseries(prom_url),
+            tier_weights=tier_weights,
+        )
+    )
     logger.info(
         "gateway_started",
         routing_mode=state.settings.routing_mode.value,
@@ -370,6 +382,9 @@ def create_app() -> FastAPI:
                 "bandit_policy_active": st.bandit.policy_active,
             }
 
+        tier_weights = {
+            ep.tier.value: ep.tier_weight for ep in st.endpoints
+        }
         console_router = create_console_router(
             event_bus=st.event_bus,
             benchmark_runner=st.benchmark_runner,
@@ -380,6 +395,7 @@ def create_app() -> FastAPI:
             get_health=console_health,
             bandit=st.bandit,
             bandit_checkpoint_path=st.settings.bandit_checkpoint_path,
+            tier_weights=tier_weights,
         )
         app.include_router(console_router)
 

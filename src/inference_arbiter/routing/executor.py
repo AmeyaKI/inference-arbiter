@@ -110,6 +110,7 @@ class TierExecutor:
             )
 
         best_response = None
+        best_response_text = ""
         best_tier = ranked[0] if ranked else ModelTier.SMALL
 
         for tier in ranked:
@@ -185,9 +186,11 @@ class TierExecutor:
 
             best_response = response
             best_tier = tier
+            best_response_text = text
 
             if verification.passed:
                 ctx.failure_attribution = FailureAttribution.NONE
+                ctx.set_response_text(text)
                 break
 
             ctx.failure_attribution = verification.failure_attribution
@@ -203,9 +206,16 @@ class TierExecutor:
             degraded = True
             degradation_reason = DegradationReason.MODEL_CAPACITY
             routing_reason = RoutingReason.FALLBACK
-            best_response, _, _ = await invoke_backend(
+            best_response, response_body, _ = await invoke_backend(
                 tier=best_tier, payload=payload, stream=False, ctx=ctx, force=True
             )
+            if isinstance(response_body, dict):
+                best_response_text = extract_response_text(response_body)
+            elif isinstance(response_body, str):
+                best_response_text = response_body
+
+        if not ctx.response_text and best_response_text:
+            ctx.set_response_text(best_response_text)
 
         return self._finalize(
             ctx,
@@ -226,9 +236,16 @@ class TierExecutor:
         routing_reason: RoutingReason,
     ) -> ExecutionResult:
         ctx.tiers_attempted.append(tier.value)
-        response, _, _ = await invoke_backend(
+        response, response_body, _ = await invoke_backend(
             tier=tier, payload=payload, stream=stream, ctx=ctx
         )
+        if not stream:
+            text = ""
+            if isinstance(response_body, dict):
+                text = extract_response_text(response_body)
+            elif isinstance(response_body, str):
+                text = response_body
+            ctx.set_response_text(text)
         return self._finalize(ctx, response, tier, routing_reason, False, None)
 
     async def _execute_streaming(

@@ -85,6 +85,10 @@ class RequestContext:
     tiers_attempted: list[str] = field(default_factory=list)
     feature_vector: list[float] | None = None
     shadow_would_route_to: str | None = None
+    response_text: str | None = None
+
+    _RESPONSE_AUDIT_MAX_LEN = 4096
+    _RESPONSE_PREVIEW_LEN = 200
 
     @classmethod
     def create(
@@ -119,6 +123,23 @@ class RequestContext:
         if self.timestamps.deadline_epoch_ms is None:
             return None
         return max(0.0, self.timestamps.deadline_epoch_ms - time.time() * 1000)
+
+    def set_response_text(self, text: str | None) -> None:
+        if not text:
+            self.response_text = None
+            return
+        trimmed = text.strip()
+        if len(trimmed) > self._RESPONSE_AUDIT_MAX_LEN:
+            trimmed = trimmed[: self._RESPONSE_AUDIT_MAX_LEN] + "..."
+        self.response_text = trimmed
+
+    @property
+    def response_preview(self) -> str | None:
+        if not self.response_text:
+            return None
+        if len(self.response_text) <= self._RESPONSE_PREVIEW_LEN:
+            return self.response_text
+        return self.response_text[: self._RESPONSE_PREVIEW_LEN] + "..."
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -170,4 +191,6 @@ class RequestContext:
             "degradation_reason": self.degradation_reason,
             "tiers_attempted": self.tiers_attempted,
             "shadow_would_route_to": self.shadow_would_route_to,
+            "response_text": self.response_text,
+            "response_preview": self.response_preview,
         }

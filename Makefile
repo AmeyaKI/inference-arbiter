@@ -35,6 +35,11 @@ down:
 console:
 	@echo "Open http://localhost:8080/console"
 
+save-bench:
+	@curl -sf -X POST $(HOST)/console/api/benchmark/save \
+		-H "Content-Type: application/json" \
+		-d '{"label":"$(LABEL)"}' | python3 -m json.tool
+
 bench:
 	@case "$(SCENARIO)" in \
 		baseline) USER=BaselineUser ;; \

@@ -12,6 +12,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
+from inference_arbiter.benchmark.export import save_benchmark_session
 from inference_arbiter.benchmark.runner import BenchmarkRunner
 from inference_arbiter.console.metrics_proxy import fetch_metrics_summary, fetch_timeseries_data
 from inference_arbiter.observability.events import RoutingEventBus
@@ -26,6 +27,11 @@ class BenchmarkStartRequest(BaseModel):
     duration_s: float = Field(default=180.0, ge=10, le=3600)
     baseline_model: str = Field(default="large", pattern="^(small|medium|large)$")
     max_requests: int = Field(default=0, ge=0, le=10000)
+    label: str = Field(default="", max_length=120)
+
+
+class BenchmarkSaveRequest(BaseModel):
+    label: str = Field(default="", max_length=120)
 
 
 def create_console_router(
@@ -38,6 +44,7 @@ def create_console_router(
     clear_audit=None,
     bandit=None,
     bandit_checkpoint_path: str = "",
+    tier_weights: dict[str, float] | None = None,
 ) -> APIRouter:
     router = APIRouter()
 
@@ -102,15 +109,33 @@ def create_console_router(
             duration_s=body.duration_s,
             baseline_model=body.baseline_model,
             max_requests=body.max_requests,
+            label=body.label,
         )
 
     @router.post("/console/api/benchmark/stop")
     async def benchmark_stop():
-        return benchmark_runner.stop_nowait()
+        return await benchmark_runner.stop()
 
     @router.get("/console/api/benchmark/status")
     async def benchmark_status():
         return await benchmark_runner.status()
+
+    @router.post("/console/api/benchmark/save")
+    async def benchmark_save(body: BenchmarkSaveRequest):
+        completed = benchmark_runner.completed_runs
+        if not completed:
+            raise HTTPException(status_code=400, detail="no completed benchmark runs to save")
+        audit_records = get_all_audit_records() if get_all_audit_records else []
+        try:
+            result = save_benchmark_session(
+                completed,
+                label=body.label,
+                audit_records=audit_records,
+                tier_weights=tier_weights,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return result
 
     @router.get("/console/api/routing/all")
     async def console_routing_all():

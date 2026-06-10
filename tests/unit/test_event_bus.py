@@ -22,11 +22,13 @@ def test_build_routing_event_minimal():
     ctx.status = "completed"
     ctx.final_tier = "small"
     ctx.metrics.current_elapsed_ms = 42.0
+    ctx.set_response_text("Paris is the capital of France.")
     event = build_routing_event(ctx, priority="interactive")
     assert event["request_id"] == "abc-123"
     assert event["final_tier"] == "small"
     assert event["elapsed_ms"] == 42.0
     assert "hello" in event["prompt_preview"]
+    assert "Paris" in event["response_preview"]
 
 
 @pytest.mark.asyncio

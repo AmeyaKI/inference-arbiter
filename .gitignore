@@ -22,8 +22,10 @@ htmlcov/
 .env
 .env.*
 
-# Benchmark artifacts
-benchmarks/results/
+# Benchmark session archives (manual multi-scenario saves)
+benchmarks/sessions/
+!benchmarks/latest.json
+!benchmarks/latest.md
 
 # Dev entry points (tracked)
 # scripts/arbiter — interactive control plane (also: arbiter console script in pyproject.toml)

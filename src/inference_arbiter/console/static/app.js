@@ -23,9 +23,9 @@ const CHART_THEME = {
 const liveFeed = document.getElementById("live-feed");
 const feedEmpty = document.getElementById("feed-empty");
 
-let benchChart = null;
 let benchPollTimer = null;
 let metricsPollTimer = null;
+let benchTsPollTimer = null;
 let benchStartTime = null;
 let benchDuration = 0;
 let benchUsers = 0;
@@ -121,6 +121,8 @@ function switchTab(tabName) {
   document.querySelectorAll(".panel").forEach((p) => p.classList.remove("active"));
   const panel = document.getElementById(`panel-${tabName}`);
   if (panel) panel.classList.add("active");
+  if (tabName === "benchmark") startBenchChartsPoll();
+  else stopBenchChartsPoll();
   if (tabName === "metrics") startMetricsPoll();
   else stopMetricsPoll();
 }
@@ -306,9 +308,15 @@ function addFeedRow(event) {
 
   const row = document.createElement("div");
   row.className = "feed-row entering";
+  const responseLine = event.response_preview
+    ? `<div class="feed-response">${esc(event.response_preview)}</div>`
+    : "";
   row.innerHTML = `
     <div class="tier-cell">${tierPill(tier)}</div>
-    <div class="feed-prompt">${esc(event.prompt_preview || "—")}</div>
+    <div class="feed-io">
+      <div class="feed-prompt">${esc(event.prompt_preview || "—")}</div>
+      ${responseLine}
+    </div>
     <div class="feed-route">${esc(cascade + reason)}</div>
     <div class="feed-latency ${latCls(event.elapsed_ms)}">${fmtMs(event.elapsed_ms)}</div>
     <div class="feed-row-audit">audit →</div>
@@ -450,9 +458,12 @@ function renderAuditSummary(data) {
     ${Object.keys(payload).length > 0 ? `
     <div class="audit-section-title" style="margin-top:8px">Prompt metadata</div>
     <div class="audit-meta-grid">
+      <span>preview: <strong>${esc(payload.prompt_preview || "—")}</strong></span>
       <span>tokens: <strong>${payload.estimated_tokens ?? "—"}</strong></span>
       <span>hash: <strong>${esc(payload.prompt_hash || "—")}</strong></span>
     </div>` : ""}
+    <div class="audit-section-title" style="margin-top:8px">Model output</div>
+    <div class="audit-response-box">${esc(data.response_text || data.response_preview || "(no output recorded)")}</div>
   `;
 }
 
@@ -512,6 +523,9 @@ document.getElementById("audit-copy").addEventListener("click", () => {
 
 document.getElementById("bench-start").addEventListener("click", startBench);
 document.getElementById("bench-stop").addEventListener("click", stopBench);
+document.getElementById("bench-save").addEventListener("click", saveBenchSession);
+const benchStartEmpty = document.getElementById("bench-start-empty");
+if (benchStartEmpty) benchStartEmpty.addEventListener("click", startBench);
 
 async function startBench() {
   const scenario = document.getElementById("bench-scenario").value;
@@ -535,8 +549,10 @@ async function startBench() {
   rampWrap.classList.remove("hidden");
   document.getElementById("ramp-label").textContent = `Spawning ${users} workers at ${spawnRate}/s…`;
 
-  initBenchChart();
+  if (!charts["chart-ts-rps"]) initTsCharts();
+  startBenchChartsPoll();
 
+  const label = document.getElementById("bench-label")?.value?.trim() || "";
   const body = {
     scenario,
     users,
@@ -544,6 +560,7 @@ async function startBench() {
     baseline_model: baselineModel,
     duration_s: benchMode === "requests" ? 86400 : durationS,
     max_requests: benchMode === "requests" ? maxRequests : 0,
+    label,
   };
 
   await fetch("/console/api/benchmark/start", {
@@ -606,17 +623,6 @@ async function pollBench() {
       }
     }
 
-    if (benchChart && data.running) {
-      const elapsed = benchStartTime ? Math.round((Date.now() - benchStartTime) / 1000) : 0;
-      benchChart.data.labels.push(`${elapsed}s`);
-      benchChart.data.datasets[0].data.push(typeof data.rps === "number" ? data.rps : 0);
-      if (benchChart.data.labels.length > 90) {
-        benchChart.data.labels.shift();
-        benchChart.data.datasets[0].data.shift();
-      }
-      benchChart.update("none");
-    }
-
     if (!data.running && benchPollTimer) {
       document.getElementById("bench-start").disabled = false;
       document.getElementById("bench-stop").disabled = true;
@@ -626,7 +632,16 @@ async function pollBench() {
       clearInterval(benchPollTimer);
       benchPollTimer = null;
       benchStartTime = null;
-      showToast("Benchmark complete");
+      if (data.last_archive?.run_dir) {
+        showToast(`Saved → ${data.last_archive.run_dir}`);
+        const hint = document.getElementById("bench-save-hint");
+        if (hint) {
+          hint.textContent = `Auto-saved to ${data.last_archive.run_dir}`;
+          hint.classList.remove("hidden");
+        }
+      } else {
+        showToast("Benchmark complete");
+      }
     }
 
     const runs = data.completed_runs || {};
@@ -635,37 +650,40 @@ async function pollBench() {
       lastCompletedRunsKey = key;
       renderComparison(runs);
     }
+    const saveBtn = document.getElementById("bench-save");
+    if (saveBtn) {
+      saveBtn.disabled = data.running || Object.keys(runs).length === 0;
+    }
   } catch (_) {}
 }
 
-function initBenchChart() {
-  const ctx = document.getElementById("bench-chart");
-  if (benchChart) benchChart.destroy();
-  benchChart = new Chart(ctx, {
-    type: "line",
-    data: {
-      labels: [],
-      datasets: [{
-        data: [],
-        borderColor: CHART_THEME.accent,
-        backgroundColor: CHART_THEME.accentFill,
-        fill: true,
-        tension: 0.35,
-        pointRadius: 0,
-        borderWidth: 2,
-      }],
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      animation: false,
-      plugins: { legend: { display: false } },
-      scales: {
-        x: { display: false },
-        y: chartScales("req/s").y,
-      },
-    },
-  });
+async function saveBenchSession() {
+  const label = document.getElementById("bench-label")?.value?.trim() || "";
+  const saveBtn = document.getElementById("bench-save");
+  const hint = document.getElementById("bench-save-hint");
+  if (saveBtn) saveBtn.disabled = true;
+  try {
+    const resp = await fetch("/console/api/benchmark/save", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ label }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) {
+      throw new Error(data.detail || "Save failed");
+    }
+    const paths = data.paths || {};
+    const msg = `Saved ${data.run_count} run(s) → ${paths.latest_json || "benchmarks/latest.json"}`;
+    if (hint) {
+      hint.textContent = msg;
+      hint.classList.remove("hidden");
+    }
+    showToast(msg);
+  } catch (err) {
+    showToast(err.message || "Save failed");
+  } finally {
+    pollBench();
+  }
 }
 
 // ── comparison card ──────────────────────────────────────────
@@ -750,20 +768,26 @@ function renderComparison(runs) {
 
 // ── metrics tab ──────────────────────────────────────────────
 
-let tsPollTimer = null;
+function startBenchChartsPoll() {
+  requestAnimationFrame(() => pollTimeseries());
+  if (!benchTsPollTimer) {
+    benchTsPollTimer = setInterval(pollTimeseries, 10000);
+  }
+}
+
+function stopBenchChartsPoll() {
+  clearInterval(benchTsPollTimer);
+  benchTsPollTimer = null;
+}
 
 function startMetricsPoll() {
   requestAnimationFrame(() => pollMetrics());
-  requestAnimationFrame(() => pollTimeseries());
   metricsPollTimer = setInterval(pollMetrics, 5000);
-  tsPollTimer = setInterval(pollTimeseries, 10000);
 }
 
 function stopMetricsPoll() {
   clearInterval(metricsPollTimer);
-  clearInterval(tsPollTimer);
   metricsPollTimer = null;
-  tsPollTimer = null;
 }
 
 function updateKpiRing(elId, valId, pct, color) {
@@ -1030,9 +1054,17 @@ function updateTsChart(id, labels, ...seriesValues) {
 }
 
 async function pollTimeseries() {
+  const banner = document.getElementById("bench-ts-banner");
   try {
     const data = await fetch("/console/api/metrics/timeseries").then((r) => r.json());
-    if (!data.available) return;
+    if (!data.available) {
+      if (banner) {
+        banner.textContent = `Prometheus unavailable: ${data.error || "not reachable"} — charts need docker compose up -d`;
+        banner.classList.remove("hidden");
+      }
+      return;
+    }
+    if (banner) banner.classList.add("hidden");
 
     if (!charts["chart-ts-rps"]) initTsCharts();
 
@@ -1150,4 +1182,5 @@ document.getElementById("custom-audit-btn").addEventListener("click", () => {
 // ── init ──────────────────────────────────────────────────────
 
 connectSSE();
+startBenchChartsPoll();
 lucide.createIcons();
