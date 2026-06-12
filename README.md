@@ -297,13 +297,15 @@ It is a routing control plane, not a model server. Your backends (Ollama, vLLM, 
 
 ### Where it sits in the stack
 
-| Category | Examples | What they optimize | What inference-arbiter adds |
-| --- | --- | --- | --- |
-| Model servers | vLLM, TGI, llama.cpp server | Throughput, KV-cache, batching for one model | Capability-tier selection across small/medium/large with cost-aware learning |
-| Replica routers | vLLM Router | Load-balance identical replicas | Rank tiers by prompt complexity + live load, not round-robin |
-| Provider proxies | LiteLLM, Bifrost, OpenRouter | Multi-cloud API failover | Self-hosted tier routing with online bandit rewards |
-| Academic routers | RouteLLM, PROTEUS, FrugalGPT | Offline preference labels / cascade papers | Production control plane: admission shedding, circuit breakers, audit API, Prometheus |
-| Orchestration | Ray Serve | DIY deployment graphs | Opinionated Admission → Bandit → Executor → Telemetry pipeline with explainable per-request decisions |
+
+| Category         | Examples                     | What they optimize                           | What inference-arbiter adds                                                                           |
+| ---------------- | ---------------------------- | -------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| Model servers    | vLLM, TGI, llama.cpp server  | Throughput, KV-cache, batching for one model | Capability-tier selection across small/medium/large with cost-aware learning                          |
+| Replica routers  | vLLM Router                  | Load-balance identical replicas              | Rank tiers by prompt complexity + live load, not round-robin                                          |
+| Provider proxies | LiteLLM, Bifrost, OpenRouter | Multi-cloud API failover                     | Self-hosted tier routing with online bandit rewards                                                   |
+| Academic routers | RouteLLM, PROTEUS, FrugalGPT | Offline preference labels / cascade papers   | Production control plane: admission shedding, circuit breakers, audit API, Prometheus                 |
+| Orchestration    | Ray Serve                    | DIY deployment graphs                        | Opinionated Admission → Bandit → Executor → Telemetry pipeline with explainable per-request decisions |
+
 
 ### Three things only a routing control plane can do
 
@@ -336,21 +338,26 @@ A LinUCB bandit ranks tiers using a 16-dimensional feature vector extracted from
 
 ### Feature comparison
 
-| Feature | inference-arbiter | vLLM / TGI | LiteLLM / OpenRouter | RouteLLM / PROTEUS | Ray Serve |
-| --- | --- | --- | --- | --- | --- |
-| Runs inference | — (routes only) | ✓ | — (proxies) | — | ✓ (you deploy) |
-| Multi-tier capability routing | ✓ 1b / 3b / 8b | — single model | — provider selection | ✓ offline router | DIY pipelines |
-| SLO-budget cascade | ✓ wall-clock per tier | — | — | — | DIY |
-| Quality-driven escalation | ✓ structural verifiers | — | — | paper-level | DIY |
-| Online bandit learning | ✓ live telemetry | — | — | offline labels | — |
-| Batch admission shedding | ✓ router-layer 503 | — | — | — | DIY |
-| Per-request audit trail | ✓ full RequestContext | — | — | — | DIY |
-| Circuit breakers + Prometheus | ✓ | partial | partial | — | DIY |
-| OpenAI compatible gateway | ✓ | ✓ | ✓ | — | DIY |
-| Built-in benchmark console | ✓ | — | — | — | — |
+
+| Feature                       | inference-arbiter      | vLLM / TGI     | LiteLLM / OpenRouter | RouteLLM / PROTEUS | Ray Serve      |
+| ----------------------------- | ---------------------- | -------------- | -------------------- | ------------------ | -------------- |
+| Runs inference                | — (routes only)        | ✓              | — (proxies)          | —                  | ✓ (you deploy) |
+| Multi-tier capability routing | ✓ 1b / 3b / 8b         | — single model | — provider selection | ✓ offline router   | DIY pipelines  |
+| SLO-budget cascade            | ✓ wall-clock per tier  | —              | —                    | —                  | DIY            |
+| Quality-driven escalation     | ✓ structural verifiers | —              | —                    | paper-level        | DIY            |
+| Online bandit learning        | ✓ live telemetry       | —              | —                    | offline labels     | —              |
+| Batch admission shedding      | ✓ router-layer 503     | —              | —                    | —                  | DIY            |
+| Per-request audit trail       | ✓ full RequestContext  | —              | —                    | —                  | DIY            |
+| Circuit breakers + Prometheus | ✓                      | partial        | partial              | —                  | DIY            |
+| OpenAI compatible gateway     | ✓                      | ✓              | ✓                    | —                  | DIY            |
+| Built-in benchmark console    | ✓                      | —              | —                    | —                  | —              |
+
 
 ### One-liner
 
 > Point your OpenAI SDK at `:8080` with `model: "auto"` — inference-arbiter learns which tier to try first, escalates when quality or SLO demands it, and sheds batch traffic before interactive latency degrades.
+
+
+
 
 
