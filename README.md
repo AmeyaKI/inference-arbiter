@@ -26,11 +26,11 @@ That's it. The console opens automatically at **[http://localhost:8080/console](
 **Entry points** (all installed by `pip install -e ".[dev]"`):
 
 
-| Command                   | What it does                                                   |
-| ------------------------- | -------------------------------------------------------------- |
-| `arbiter`                 | Interactive terminal REPL — stack control, benchmarks, debug   |
-| `make start` / `make dev` | Non-interactive stack bootstrap (same as `arbiter start`)      |
-| `inference-arbiter`       | Run the gateway directly (no Docker; needs Ollama at `:11434`) |
+| Command                   | What it does                                                      |
+| ------------------------- | ----------------------------------------------------------------- |
+| `arbiter`                 | Interactive terminal REPL — stack control, benchmarks, debug, etc |
+| `make start` / `make dev` | Non-interactive stack bootstrap (same as `arbiter start`)         |
+| `inference-arbiter`       | Run the gateway directly (no Docker; needs Ollama at `:11434`)    |
 
 
 ---
@@ -356,8 +356,6 @@ A LinUCB bandit ranks tiers using a 16-dimensional feature vector extracted from
 ### One-liner
 
 > Point your OpenAI SDK at `:8080` with `model: "auto"` — inference-arbiter learns which tier to try first, escalates when quality or SLO demands it, and sheds batch traffic before interactive latency degrades.
-
-
 
 
 
